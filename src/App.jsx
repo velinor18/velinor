@@ -50,6 +50,7 @@ export default function App() {
 
   useEffect(() => {
     let isMounted = true
+    let subscription = null
 
     const bootstrap = async () => {
       if (!supabase) {
@@ -78,34 +79,33 @@ export default function App() {
       }
 
       setAuthLoading(false)
+
+      const authListener = supabase.auth.onAuthStateChange((_event, nextSession) => {
+        if (!isMounted) return
+
+        const authUser = nextSession?.user ?? null
+        setUser(authUser)
+
+        if (authUser) {
+          const cachedProfile = readCachedProfile(authUser.id)
+          setProfile(cachedProfile ?? null)
+        } else {
+          setProfile(null)
+        }
+
+        setAuthLoading(false)
+      })
+
+      subscription = authListener?.data?.subscription ?? null
     }
 
     bootstrap()
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!isMounted) return
-
-      const nextUser = session?.user ?? null
-      setUser(nextUser)
-
-      if (nextUser) {
-        const cachedProfile = readCachedProfile(nextUser.id)
-        setProfile(cachedProfile ?? null)
-      } else {
-        if (user?.id) {
-          clearCachedProfile(user.id)
-        }
-        setProfile(null)
-      }
-
-      setAuthLoading(false)
-    })
-
     return () => {
       isMounted = false
-      subscription.unsubscribe()
+      if (subscription) {
+        subscription.unsubscribe()
+      }
     }
   }, [])
 
@@ -115,6 +115,9 @@ export default function App() {
     const loadProfile = async () => {
       if (!supabase || !user) {
         if (isMounted) {
+          if (user?.id) {
+            clearCachedProfile(user.id)
+          }
           setProfile(null)
           setProfileLoading(false)
         }
