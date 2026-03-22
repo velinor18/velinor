@@ -144,11 +144,13 @@ function ModalShell({ open, title, onClose, children }) {
       onClick={onClose}
     >
       <div
-        className="relative max-h-[92vh] w-full max-w-3xl overflow-hidden rounded-[28px] border border-fuchsia-500/25 bg-[#0b0b18] shadow-[0_0_80px_rgba(168,85,247,0.2)]"
+        className="relative max-h-[92vh] w-full max-w-3xl overflow-hidden rounded-[24px] border border-fuchsia-500/25 bg-[#0b0b18] shadow-[0_0_80px_rgba(168,85,247,0.2)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-fuchsia-500/15 px-6 py-5">
-          <div className="text-2xl font-black text-white">{title}</div>
+        <div className="flex items-center justify-between gap-4 border-b border-fuchsia-500/15 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="pr-2 text-xl font-black leading-tight text-white sm:text-2xl">
+            {title}
+          </div>
 
           <button
             onClick={onClose}
@@ -158,7 +160,7 @@ function ModalShell({ open, title, onClose, children }) {
           </button>
         </div>
 
-        <div className="max-h-[calc(92vh-78px)] overflow-y-auto px-6 py-6">
+        <div className="max-h-[calc(92vh-78px)] overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
           {children}
         </div>
       </div>
@@ -322,12 +324,12 @@ export default function HomePage({ user, profile }) {
 
   useEffect(() => {
     const handleOpenOrders = async () => {
-  setIsOrdersModalOpen(true)
-  setOrdersTab('active')
-  if (user) {
-    await loadOrders()
-  }
-}
+      setIsOrdersModalOpen(true)
+      setOrdersTab('active')
+      if (user) {
+        await loadOrders()
+      }
+    }
 
     window.addEventListener('openPurchasesModal', handleOpenOrders)
 
@@ -434,7 +436,7 @@ export default function HomePage({ user, profile }) {
     setUploadedFile(null)
     setIsPurchaseModalOpen(false)
     setIsOrdersModalOpen(true)
-    setOrdersTab('history')
+    setOrdersTab('active')
     setToast('Заявка успешно отправлена')
   }
 
@@ -445,13 +447,13 @@ export default function HomePage({ user, profile }) {
 
   const activeOrders = orders.filter((item) => item.status === 'pending')
 
-const approvedGoods = orders.filter(
-  (item) => item.status === 'approved' && item.promo_code
-)
+  const approvedGoods = orders.filter(
+    (item) => item.status === 'approved' && item.promo_code
+  )
 
-const archivedOrders = orders.filter(
-  (item) => item.status === 'approved' || item.status === 'rejected'
-)
+  const archivedOrders = orders.filter(
+    (item) => item.status === 'approved' || item.status === 'rejected'
+  )
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -800,193 +802,205 @@ const archivedOrders = orders.filter(
       </ModalShell>
 
       <ModalShell
-  open={isOrdersModalOpen}
-  title="Мои покупки"
-  onClose={() => setIsOrdersModalOpen(false)}
->
-  {!user ? (
-    <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center">
-      <div className="text-3xl font-black">Войдите в аккаунт</div>
-      <p className="mx-auto mt-4 max-w-lg text-lg leading-8 text-zinc-400">
-        Раздел с покупками доступен только после входа.
-      </p>
-
-      <GlowButton
-        className="mt-8"
-        onClick={() => {
-          setIsOrdersModalOpen(false)
-          navigate('/login')
-        }}
+        open={isOrdersModalOpen}
+        title="Мои покупки"
+        onClose={() => setIsOrdersModalOpen(false)}
       >
-        Перейти ко входу
-      </GlowButton>
-    </div>
-  ) : (
-    <div>
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="grid grid-cols-3 gap-3 sm:flex">
-          <button
-            onClick={() => setOrdersTab('active')}
-            className={`rounded-xl px-4 py-3 text-sm font-bold uppercase tracking-wide transition ${
-              ordersTab === 'active'
-                ? 'bg-fuchsia-600 text-white'
-                : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
-            }`}
-          >
-            Активные заказы
-          </button>
-
-          <button
-            onClick={() => setOrdersTab('goods')}
-            className={`rounded-xl px-4 py-3 text-sm font-bold uppercase tracking-wide transition ${
-              ordersTab === 'goods'
-                ? 'bg-fuchsia-600 text-white'
-                : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
-            }`}
-          >
-            Полученные товары
-          </button>
-
-          <button
-            onClick={() => setOrdersTab('archive')}
-            className={`rounded-xl px-4 py-3 text-sm font-bold uppercase tracking-wide transition ${
-              ordersTab === 'archive'
-                ? 'bg-fuchsia-600 text-white'
-                : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
-            }`}
-          >
-            Архив
-          </button>
-        </div>
-
-        <button
-          onClick={loadOrders}
-          className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-        >
-          Обновить
-        </button>
-      </div>
-
-      {ordersLoading ? (
-        <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center text-lg text-zinc-300">
-          Загружаем данные...
-        </div>
-      ) : ordersTab === 'active' ? (
-        activeOrders.length === 0 ? (
+        {!user ? (
           <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center">
-            <div className="text-3xl font-black">Активных заказов нет</div>
+            <div className="text-3xl font-black">Войдите в аккаунт</div>
             <p className="mx-auto mt-4 max-w-lg text-lg leading-8 text-zinc-400">
-              Здесь будут отображаться все заявки, которые ещё находятся на проверке.
+              Раздел с покупками доступен только после входа.
             </p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {activeOrders.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-5"
-              >
-                <div className="grid gap-5 lg:grid-cols-[1.4fr_220px]">
-                  <div className="space-y-3">
-                    <div className="text-3xl font-black">{item.plan_name}</div>
-                    <div className="text-lg text-zinc-300">Сумма: {item.price_label}</div>
-                    <div className="text-lg text-zinc-300">
-                      Статус: {getStatusLabel(item.status)}
-                    </div>
-                    <div className="text-base text-zinc-500">
-                      Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
-                    </div>
-                  </div>
 
-                  <button
-                    onClick={() => openOrderPreview(item)}
-                    className="flex min-h-[180px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-6 text-center text-2xl font-black uppercase tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20"
-                  >
-                    Скриншот
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )
-      ) : ordersTab === 'goods' ? (
-        approvedGoods.length === 0 ? (
-          <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center">
-            <div className="text-3xl font-black">Пока нет товаров</div>
-            <p className="mx-auto mt-4 max-w-lg text-lg leading-8 text-zinc-400">
-              После подтверждения оплаты здесь появятся ваши полученные товары.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {approvedGoods.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-[24px] border border-emerald-500/20 bg-emerald-500/10 p-5"
-              >
-                <div className="grid gap-5 md:grid-cols-[1fr_auto] md:items-center">
-                  <div>
-                    <div className="text-2xl font-black text-white">{item.plan_name}</div>
-                    <div className="mt-2 text-zinc-200">Промокод: {item.promo_code}</div>
-                  </div>
-
-                  <button
-                    onClick={() =>
-                      copyText(
-                        item.promo_code,
-                        () => showSuccessCopy('Промокод скопирован'),
-                        showFailCopy
-                      )
-                    }
-                    className="rounded-xl border border-emerald-300/20 bg-black/20 px-4 py-3 text-sm font-bold uppercase tracking-wide text-white"
-                  >
-                    Скопировать
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )
-      ) : archivedOrders.length === 0 ? (
-        <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center">
-          <div className="text-3xl font-black">Архив пуст</div>
-          <p className="mx-auto mt-4 max-w-lg text-lg leading-8 text-zinc-400">
-            Здесь будут находиться завершённые и отклонённые заказы.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {archivedOrders.map((item) => (
-            <div
-              key={item.id}
-              className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-5"
+            <GlowButton
+              className="mt-8"
+              onClick={() => {
+                setIsOrdersModalOpen(false)
+                navigate('/login')
+              }}
             >
-              <div className="grid gap-5 lg:grid-cols-[1.4fr_220px]">
-                <div className="space-y-3">
-                  <div className="text-3xl font-black">{item.plan_name}</div>
-                  <div className="text-lg text-zinc-300">Сумма: {item.price_label}</div>
-                  <div className="text-lg text-zinc-300">
-                    Статус: {getStatusLabel(item.status)}
-                  </div>
-                  <div className="text-base text-zinc-500">
-                    Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
-                  </div>
-                </div>
+              Перейти ко входу
+            </GlowButton>
+          </div>
+        ) : (
+          <div>
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:flex">
+                <button
+                  onClick={() => setOrdersTab('active')}
+                  className={`rounded-xl px-4 py-3 text-sm font-bold uppercase tracking-wide transition ${
+                    ordersTab === 'active'
+                      ? 'bg-fuchsia-600 text-white'
+                      : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
+                  }`}
+                >
+                  Активные заказы
+                </button>
 
                 <button
-                  onClick={() => openOrderPreview(item)}
-                  className="flex min-h-[180px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-6 text-center text-2xl font-black uppercase tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20"
+                  onClick={() => setOrdersTab('goods')}
+                  className={`rounded-xl px-4 py-3 text-sm font-bold uppercase tracking-wide transition ${
+                    ordersTab === 'goods'
+                      ? 'bg-fuchsia-600 text-white'
+                      : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
+                  }`}
                 >
-                  Скриншот
+                  Полученные товары
+                </button>
+
+                <button
+                  onClick={() => setOrdersTab('archive')}
+                  className={`rounded-xl px-4 py-3 text-sm font-bold uppercase tracking-wide transition ${
+                    ordersTab === 'archive'
+                      ? 'bg-fuchsia-600 text-white'
+                      : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
+                  }`}
+                >
+                  Архив
                 </button>
               </div>
+
+              <button
+                onClick={loadOrders}
+                className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+              >
+                Обновить
+              </button>
             </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )}
-</ModalShell>
+
+            {ordersLoading ? (
+              <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center text-lg text-zinc-300">
+                Загружаем данные...
+              </div>
+            ) : ordersTab === 'active' ? (
+              activeOrders.length === 0 ? (
+                <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center">
+                  <div className="text-3xl font-black">Активных заказов нет</div>
+                  <p className="mx-auto mt-4 max-w-lg text-lg leading-8 text-zinc-400">
+                    Здесь будут отображаться все заявки, которые ещё находятся на проверке.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {activeOrders.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-5"
+                    >
+                      <div className="grid gap-5 lg:grid-cols-[1.4fr_220px]">
+                        <div className="space-y-3">
+                          <div className="break-words text-2xl font-black leading-tight sm:text-3xl">
+                            {item.plan_name}
+                          </div>
+                          <div className="break-words text-base text-zinc-300 sm:text-lg">
+                            Сумма: {item.price_label}
+                          </div>
+                          <div className="break-words text-base text-zinc-300 sm:text-lg">
+                            Статус: {getStatusLabel(item.status)}
+                          </div>
+                          <div className="text-base text-zinc-500">
+                            Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => openOrderPreview(item)}
+                          className="flex min-h-[140px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-4 text-center text-lg font-black uppercase leading-tight tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20 sm:min-h-[180px] sm:p-6 sm:text-2xl"
+                        >
+                          Скриншот
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : ordersTab === 'goods' ? (
+              approvedGoods.length === 0 ? (
+                <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center">
+                  <div className="text-3xl font-black">Пока нет товаров</div>
+                  <p className="mx-auto mt-4 max-w-lg text-lg leading-8 text-zinc-400">
+                    После подтверждения оплаты здесь появятся ваши полученные товары.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {approvedGoods.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-[24px] border border-emerald-500/20 bg-emerald-500/10 p-5"
+                    >
+                      <div className="grid gap-5 md:grid-cols-[1fr_auto] md:items-center">
+                        <div>
+                          <div className="break-words text-xl font-black leading-tight text-white sm:text-2xl">
+                            {item.plan_name}
+                          </div>
+                          <div className="mt-2 break-all text-zinc-200">
+                            Промокод: {item.promo_code}
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            copyText(
+                              item.promo_code,
+                              () => showSuccessCopy('Промокод скопирован'),
+                              showFailCopy
+                            )
+                          }
+                          className="rounded-xl border border-emerald-300/20 bg-black/20 px-4 py-3 text-sm font-bold uppercase tracking-wide text-white"
+                        >
+                          Скопировать
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : archivedOrders.length === 0 ? (
+              <div className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-10 text-center">
+                <div className="text-3xl font-black">Архив пуст</div>
+                <p className="mx-auto mt-4 max-w-lg text-lg leading-8 text-zinc-400">
+                  Здесь будут находиться завершённые и отклонённые заказы.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {archivedOrders.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-5"
+                  >
+                    <div className="grid gap-5 lg:grid-cols-[1.4fr_220px]">
+                      <div className="space-y-3">
+                        <div className="break-words text-2xl font-black leading-tight sm:text-3xl">
+                          {item.plan_name}
+                        </div>
+                        <div className="break-words text-base text-zinc-300 sm:text-lg">
+                          Сумма: {item.price_label}
+                        </div>
+                        <div className="break-words text-base text-zinc-300 sm:text-lg">
+                          Статус: {getStatusLabel(item.status)}
+                        </div>
+                        <div className="text-base text-zinc-500">
+                          Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => openOrderPreview(item)}
+                        className="flex min-h-[140px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-4 text-center text-lg font-black uppercase leading-tight tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20 sm:min-h-[180px] sm:p-6 sm:text-2xl"
+                      >
+                        Скриншот
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </ModalShell>
 
       <ModalShell
         open={isCryptoModalOpen}
