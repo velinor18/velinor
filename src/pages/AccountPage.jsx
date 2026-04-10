@@ -8,6 +8,7 @@ import {
   revokeObjectUrl,
   uploadAvatarBlob,
 } from '../lib/avatar'
+import { normalizeAvatarShape } from '../lib/avatarShapes'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
 
@@ -17,6 +18,7 @@ const PROFILE_SELECT_QUERY = `
   role,
   created_at,
   avatar_path,
+  avatar_shape,
   hearts_left,
   strikes_count,
   is_blocked,
@@ -77,6 +79,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [avatarObjectUrl, setAvatarObjectUrl] = useState('')
   const [avatarLoading, setAvatarLoading] = useState(false)
   const [avatarSaving, setAvatarSaving] = useState(false)
+  const [shapeSaving, setShapeSaving] = useState(false)
   const [avatarMessage, setAvatarMessage] = useState('')
   const [avatarError, setAvatarError] = useState('')
 
@@ -185,6 +188,8 @@ export default function AccountPage({ user, profile, profileLoading }) {
       ? `@${profileView.telegram_username}`
       : 'Не подключён'
 
+  const avatarShape = normalizeAvatarShape(profileView?.avatar_shape)
+
   async function handleSignOut() {
     if (!supabase) return
 
@@ -242,6 +247,45 @@ export default function AccountPage({ user, profile, profileLoading }) {
     }
 
     return true
+  }
+
+  async function handleAvatarShapeChange(nextShape) {
+    if (!supabase || !user) {
+      setAvatarError('Сессия не найдена')
+      return
+    }
+
+    const safeNextShape = normalizeAvatarShape(nextShape)
+    const currentShape = normalizeAvatarShape(profileView?.avatar_shape)
+
+    if (safeNextShape === currentShape) {
+      return
+    }
+
+    setShapeSaving(true)
+    setAvatarMessage('')
+    setAvatarError('')
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({
+        avatar_shape: safeNextShape,
+      })
+      .eq('id', user.id)
+      .select(PROFILE_SELECT_QUERY)
+      .single()
+
+    setShapeSaving(false)
+
+    if (error || !data) {
+      console.error(error)
+      setAvatarError('Не удалось сохранить форму аватара')
+      return
+    }
+
+    setProfileView(data)
+    writeCachedProfile(user.id, data)
+    setAvatarMessage('Форма аватара обновлена')
   }
 
   async function handleChangePassword(e) {
@@ -310,9 +354,12 @@ export default function AccountPage({ user, profile, profileLoading }) {
         <AvatarUploader
           username={profileView?.username ?? user?.email ?? 'U'}
           avatarUrl={avatarObjectUrl}
+          shape={avatarShape}
           loading={avatarLoading || profileLoading}
           saving={avatarSaving}
+          shapeSaving={shapeSaving}
           onSave={handleAvatarSave}
+          onShapeChange={handleAvatarShapeChange}
         />
 
         <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">

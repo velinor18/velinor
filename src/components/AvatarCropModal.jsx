@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import Cropper from 'react-easy-crop'
 import { getCroppedAvatarBlob } from '../lib/avatar'
+import { normalizeAvatarShape } from '../lib/avatarShapes'
 
 export default function AvatarCropModal({
   open,
   imageSrc,
+  shape = 'circle',
   onClose,
   onSave,
   saving = false,
@@ -23,6 +25,9 @@ export default function AvatarCropModal({
   }, [open, imageSrc])
 
   if (!open || !imageSrc) return null
+
+  const safeShape = normalizeAvatarShape(shape)
+  const cropShape = safeShape === 'circle' ? 'round' : 'rect'
 
   const handleSave = async () => {
     try {
@@ -61,9 +66,12 @@ export default function AvatarCropModal({
       >
         <div className="flex items-center justify-between border-b border-fuchsia-500/15 px-5 py-4 sm:px-6">
           <div>
-            <div className="text-2xl font-black text-white">Редактор аватара</div>
+            <div className="text-2xl font-black text-white">
+              Редактор аватара
+            </div>
+
             <div className="mt-1 text-sm text-zinc-400">
-              Перемещай изображение и меняй масштаб. Круг показывает итоговую область.
+              Перемещай изображение и меняй масштаб. Форма применяется отдельно в профиле.
             </div>
           </div>
 
@@ -82,12 +90,14 @@ export default function AvatarCropModal({
               crop={crop}
               zoom={zoom}
               aspect={1}
-              cropShape="round"
+              cropShape={cropShape}
               showGrid
               objectFit="contain"
               onCropChange={setCrop}
               onZoomChange={setZoom}
-              onCropComplete={(_, croppedPixels) => setCroppedAreaPixels(croppedPixels)}
+              onCropComplete={(_, croppedPixels) =>
+                setCroppedAreaPixels(croppedPixels)
+              }
             />
           </div>
 

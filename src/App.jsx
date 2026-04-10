@@ -48,6 +48,7 @@ const PROFILE_SELECT_QUERY = `
   role,
   created_at,
   avatar_path,
+  avatar_shape,
   hearts_left,
   strikes_count,
   is_blocked,

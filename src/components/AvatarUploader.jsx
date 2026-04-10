@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AvatarCropModal from './AvatarCropModal'
+import AvatarShapePicker from './AvatarShapePicker'
 import { validateAvatarFile } from '../lib/avatar'
+import {
+  getAvatarShapeClasses,
+  normalizeAvatarShape,
+} from '../lib/avatarShapes'
 
 function getInitials(username) {
   const safe = String(username || 'U').trim()
@@ -10,13 +15,19 @@ function getInitials(username) {
 export default function AvatarUploader({
   username,
   avatarUrl,
+  shape = 'circle',
   loading = false,
   saving = false,
+  shapeSaving = false,
   onSave,
+  onShapeChange,
 }) {
   const inputRef = useRef(null)
   const [editorImageSrc, setEditorImageSrc] = useState('')
   const [errorText, setErrorText] = useState('')
+
+  const safeShape = normalizeAvatarShape(shape)
+  const shapeClasses = getAvatarShapeClasses(safeShape)
 
   useEffect(() => {
     return () => {
@@ -45,11 +56,9 @@ export default function AvatarUploader({
       const activeElement = document.activeElement
       const isTyping =
         activeElement &&
-        (
-          activeElement.tagName === 'INPUT' ||
+        (activeElement.tagName === 'INPUT' ||
           activeElement.tagName === 'TEXTAREA' ||
-          activeElement.isContentEditable
-        )
+          activeElement.isContentEditable)
 
       if (isTyping) {
         return
@@ -110,27 +119,33 @@ export default function AvatarUploader({
       <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-6 shadow-[0_0_60px_rgba(168,85,247,0.08)] sm:p-8">
         <div className="flex flex-col items-center text-center">
           <div className="relative">
-            <button
-              type="button"
-              onClick={handlePickClick}
-              disabled={saving}
-              className="relative flex h-40 w-40 items-center justify-center overflow-hidden rounded-full border border-fuchsia-500/30 bg-black/60 shadow-[0_0_35px_rgba(168,85,247,0.18)] transition hover:scale-[1.01] sm:h-48 sm:w-48"
-              aria-label="Выбрать аватар"
+            <div
+              className={`flex h-40 w-40 items-center justify-center bg-fuchsia-500/20 p-[2px] shadow-[0_0_35px_rgba(168,85,247,0.18)] sm:h-48 sm:w-48 ${shapeClasses.outer}`}
             >
-              {loading ? (
-                <div className="text-sm font-semibold text-zinc-400">Загрузка...</div>
-              ) : avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt={`Аватар ${username}`}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-fuchsia-700/30 to-violet-700/20 text-6xl font-black text-white">
-                  {getInitials(username)}
-                </div>
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={handlePickClick}
+                disabled={saving}
+                className={`relative flex h-full w-full items-center justify-center overflow-hidden bg-black/60 transition hover:scale-[1.01] ${shapeClasses.inner}`}
+                aria-label="Выбрать аватар"
+              >
+                {loading ? (
+                  <div className="text-sm font-semibold text-zinc-400">
+                    Загрузка...
+                  </div>
+                ) : avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt={`Аватар ${username}`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-fuchsia-700/30 to-violet-700/20 text-6xl font-black text-white">
+                    {getInitials(username)}
+                  </div>
+                )}
+              </button>
+            </div>
 
             <button
               type="button"
@@ -143,7 +158,9 @@ export default function AvatarUploader({
             </button>
           </div>
 
-          <div className="mt-5 text-lg font-black text-white">Фото профиля</div>
+          <div className="mt-5 text-lg font-black text-white">
+            Фото профиля
+          </div>
 
           <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
             Нажми на аватар, чтобы выбрать новое изображение. На компьютере также можно вставить картинку через Ctrl+V.
@@ -175,6 +192,12 @@ export default function AvatarUploader({
               {errorText}
             </div>
           ) : null}
+
+          <AvatarShapePicker
+            value={safeShape}
+            loading={shapeSaving}
+            onChange={onShapeChange}
+          />
         </div>
 
         <input
@@ -189,6 +212,7 @@ export default function AvatarUploader({
       <AvatarCropModal
         open={Boolean(editorImageSrc)}
         imageSrc={editorImageSrc}
+        shape={safeShape}
         onClose={closeEditor}
         onSave={handleSave}
         saving={saving}
