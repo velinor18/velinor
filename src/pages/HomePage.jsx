@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
+import {
+  inspectReceiptImage,
+  MAX_RECEIPT_SIZE,
+  revokeReceiptPreviewUrl,
+} from '../lib/receipt'
 
 const WIDGET_STORAGE_KEY = 'velinor_widget_hidden_until'
 const WIDGET_HIDE_HOURS = 12
 const CARD_NUMBER = '2202 2088 0146 2053'
-const MAX_SCREENSHOT_SIZE = 6 * 1024 * 1024
 
 const plans = [
   {
@@ -228,6 +232,8 @@ function getStatusLabel(status) {
 
 export default function HomePage({ user, profile }) {
   const navigate = useNavigate()
+  const receiptInputRef = useRef(null)
+  const receiptPreviewUrlRef = useRef('')
 
   const [isWidgetVisible, setIsWidgetVisible] = useState(false)
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false)
@@ -238,6 +244,10 @@ export default function HomePage({ user, profile }) {
   const [selectedCrypto, setSelectedCrypto] = useState('BTC')
   const [selectedWallet, setSelectedWallet] = useState('Bybit')
   const [uploadedFile, setUploadedFile] = useState(null)
+  const [receiptStatus, setReceiptStatus] = useState('idle')
+  const [receiptError, setReceiptError] = useState('')
+  const [receiptMeta, setReceiptMeta] = useState(null)
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState('')
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -245,6 +255,60 @@ export default function HomePage({ user, profile }) {
   const [previewItem, setPreviewItem] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [toast, setToast] = useState('')
+
+  const maxReceiptMb = Math.floor(MAX_RECEIPT_SIZE / (1024 * 1024))
+
+  const replaceReceiptPreviewUrl = (nextUrl) => {
+    setReceiptPreviewUrl((prevUrl) => {
+      if (prevUrl && prevUrl !== nextUrl) {
+        revokeReceiptPreviewUrl(prevUrl)
+      }
+
+      receiptPreviewUrlRef.current = nextUrl || ''
+      return nextUrl || ''
+    })
+  }
+
+  const resetReceiptSelection = () => {
+    setUploadedFile(null)
+    setReceiptStatus('idle')
+    setReceiptError('')
+    setReceiptMeta(null)
+    replaceReceiptPreviewUrl('')
+  }
+
+  const runReceiptCheck = async (file) => {
+    if (!file) return
+
+    setReceiptStatus('checking')
+    setReceiptError('')
+    setReceiptMeta(null)
+    setUploadedFile(null)
+    replaceReceiptPreviewUrl('')
+
+    const result = await inspectReceiptImage(file)
+
+    if (!result.ok) {
+      setReceiptStatus('error')
+      setReceiptError(result.error)
+      return
+    }
+
+    setUploadedFile(file)
+    replaceReceiptPreviewUrl(result.previewUrl)
+    setReceiptMeta({
+      width: result.width,
+      height: result.height,
+      sizeLabel: `${Math.max(1, Math.round(file.size / 1024))} КБ`,
+    })
+    setReceiptStatus('ready')
+  }
+
+  useEffect(() => {
+    return () => {
+      revokeReceiptPreviewUrl(receiptPreviewUrlRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     const hiddenUntil = Number(localStorage.getItem(WIDGET_STORAGE_KEY) || 0)
@@ -256,6 +320,34 @@ export default function HomePage({ user, profile }) {
     const timer = setTimeout(() => setToast(''), 2600)
     return () => clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (!isPurchaseModalOpen) return
+
+    const handlePaste = (event) => {
+      const items = Array.from(event.clipboardData?.items ?? [])
+      const imageItem = items.find((item) => item.type.startsWith('image/'))
+
+      if (!imageItem) {
+        return
+      }
+
+      const file = imageItem.getAsFile()
+
+      if (!file) {
+        return
+      }
+
+      event.preventDefault()
+      runReceiptCheck(file)
+    }
+
+    window.addEventListener('paste', handlePaste)
+
+    return () => {
+      window.removeEventListener('paste', handlePaste)
+    }
+  }, [isPurchaseModalOpen])
 
   const stats = [
     { value: '250+', label: 'довольных клиентов' },
@@ -279,11 +371,38 @@ export default function HomePage({ user, profile }) {
     }
   }
 
+  const openReceiptPicker = () => {
+    receiptInputRef.current?.click()
+  }
+
+  const closePurchaseModal = () => {
+    setIsPurchaseModalOpen(false)
+    resetReceiptSelection()
+  }
+
   const openPurchaseModal = (plan) => {
     setSelectedPlan(plan)
     setPaymentMethod('card')
-    setUploadedFile(null)
+    resetReceiptSelection()
     setIsPurchaseModalOpen(true)
+  }
+
+  const handleReceiptInputChange = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+
+    if (!file) return
+
+    await runReceiptCheck(file)
+  }
+
+  const handleReceiptDrop = async (event) => {
+    event.preventDefault()
+    const file = event.dataTransfer?.files?.[0]
+
+    if (!file) return
+
+    await runReceiptCheck(file)
   }
 
   const loadOrders = async () => {
@@ -338,23 +457,6 @@ export default function HomePage({ user, profile }) {
     }
   }, [user])
 
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    if (!file.type.startsWith('image/')) {
-      setToast('Можно загружать только изображения')
-      return
-    }
-
-    if (file.size > MAX_SCREENSHOT_SIZE) {
-      setToast('Скриншот должен быть не больше 6 МБ')
-      return
-    }
-
-    setUploadedFile(file)
-  }
-
   const openOrderPreview = async (item) => {
     setPreviewLoading(true)
     setPreviewItem({
@@ -386,8 +488,13 @@ export default function HomePage({ user, profile }) {
       return
     }
 
-    if (!uploadedFile) {
-      setToast('Сначала загрузите скриншот оплаты')
+    if (receiptStatus === 'checking') {
+      setToast('Дождитесь завершения проверки изображения')
+      return
+    }
+
+    if (receiptStatus !== 'ready' || !uploadedFile) {
+      setToast('Сначала загрузите и проверьте скриншот оплаты')
       return
     }
 
@@ -433,7 +540,7 @@ export default function HomePage({ user, profile }) {
 
     await loadOrders()
     setSubmitting(false)
-    setUploadedFile(null)
+    resetReceiptSelection()
     setIsPurchaseModalOpen(false)
     setIsOrdersModalOpen(true)
     setOrdersTab('active')
@@ -457,7 +564,7 @@ export default function HomePage({ user, profile }) {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="fixed inset-0 pointer-events-none">
+      <div className="pointer-events-none fixed inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(147,51,234,0.18),transparent_35%),radial-gradient(circle_at_bottom,rgba(168,85,247,0.12),transparent_30%)]" />
         <div className="absolute inset-0 opacity-[0.06] [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:42px_42px]" />
       </div>
@@ -596,7 +703,7 @@ export default function HomePage({ user, profile }) {
 
           <div className="mx-auto mt-14 grid max-w-5xl gap-8 md:grid-cols-3">
             <div className="rounded-[30px] border border-fuchsia-500/10 bg-black/70 p-8 text-center shadow-[0_0_50px_rgba(0,0,0,0.35)]">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-fuchsia-600 text-white text-2xl">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-fuchsia-600 text-2xl text-white">
                 ✈
               </div>
               <h3 className="mt-8 text-2xl font-black">Telegram</h3>
@@ -616,7 +723,7 @@ export default function HomePage({ user, profile }) {
             </div>
 
             <div className="rounded-[30px] border border-fuchsia-500/10 bg-black/70 p-8 text-center shadow-[0_0_50px_rgba(0,0,0,0.35)]">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-fuchsia-600 text-white text-2xl">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-fuchsia-600 text-2xl text-white">
                 @
               </div>
               <h3 className="mt-8 text-2xl font-black">Email</h3>
@@ -636,7 +743,7 @@ export default function HomePage({ user, profile }) {
             </div>
 
             <div className="rounded-[30px] border border-fuchsia-500/10 bg-black/70 p-8 text-center shadow-[0_0_50px_rgba(0,0,0,0.35)]">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-fuchsia-600 text-white text-2xl">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-fuchsia-600 text-2xl text-white">
                 ⏰
               </div>
               <h3 className="mt-8 text-2xl font-black">Время работы</h3>
@@ -682,7 +789,7 @@ export default function HomePage({ user, profile }) {
       <ModalShell
         open={isPurchaseModalOpen}
         title={`Оплата: ${selectedPlan.title}`}
-        onClose={() => setIsPurchaseModalOpen(false)}
+        onClose={closePurchaseModal}
       >
         <div className="space-y-6">
           {!user ? (
@@ -767,34 +874,127 @@ export default function HomePage({ user, profile }) {
             </div>
           </div>
 
-          <div>
-            <div className="mb-4 text-2xl font-black">Загрузите скриншот оплаты</div>
-
-            <label className="flex min-h-[200px] cursor-pointer flex-col items-center justify-center rounded-[24px] border-2 border-dashed border-fuchsia-600/50 bg-fuchsia-900/10 p-6 text-center transition hover:bg-fuchsia-900/15">
-              <div className="text-5xl text-fuchsia-500">⇧</div>
-              <div className="mt-5 max-w-md text-2xl text-zinc-300">
-                Перетащите сюда скриншот или нажмите для выбора
+          <div className="rounded-[24px] border border-fuchsia-500/20 bg-white/[0.02] p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="text-2xl font-black">Скриншот оплаты</div>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+                  Можно выбрать файл, перетащить изображение, вставить через Ctrl+V
+                  на компьютере или выбрать фото с телефона. Перед отправкой скриншот
+                  проходит первичную автоматическую проверку.
+                </p>
               </div>
-              <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
-            </label>
 
-            {uploadedFile ? (
-              <div className="mt-4 rounded-2xl border border-fuchsia-500/20 bg-white/[0.02] px-4 py-3 text-zinc-300">
-                Выбран файл: <span className="text-fuchsia-400">{uploadedFile.name}</span> ·{' '}
-                {Math.max(1, Math.round(uploadedFile.size / 1024))} КБ
+              <button
+                type="button"
+                onClick={openReceiptPicker}
+                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+              >
+                Выбрать файл
+              </button>
+            </div>
+
+            <input
+              ref={receiptInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={handleReceiptInputChange}
+            />
+
+            <div
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleReceiptDrop}
+              className="mt-5 rounded-[24px] border-2 border-dashed border-fuchsia-600/45 bg-fuchsia-900/10 p-4 transition hover:bg-fuchsia-900/15 sm:p-6"
+            >
+              {receiptPreviewUrl ? (
+                <div className="space-y-4">
+                  <div className="overflow-hidden rounded-[20px] border border-fuchsia-500/15 bg-black">
+                    <img
+                      src={receiptPreviewUrl}
+                      alt="Предпросмотр скриншота оплаты"
+                      className="max-h-[380px] w-full object-contain"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={openReceiptPicker}
+                      className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                    >
+                      Заменить
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={resetReceiptSelection}
+                      className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
+                    >
+                      Очистить
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label className="flex min-h-[220px] cursor-pointer flex-col items-center justify-center text-center">
+                  <div className="text-5xl text-fuchsia-500">⇧</div>
+                  <div className="mt-5 max-w-md text-2xl text-zinc-300">
+                    Нажмите, чтобы выбрать скриншот, или перетащите его сюда
+                  </div>
+                  <div className="mt-3 text-sm leading-6 text-zinc-400">
+                    На компьютере также работает Ctrl+V. Максимальный размер файла {maxReceiptMb} МБ.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openReceiptPicker}
+                    className="mt-6 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                  >
+                    Выбрать изображение
+                  </button>
+                </label>
+              )}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {receiptStatus === 'checking' ? (
+                <div className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-500/10 px-4 py-3 text-sm text-fuchsia-200">
+                  Проверяем изображение перед отправкой...
+                </div>
+              ) : null}
+
+              {receiptStatus === 'error' ? (
+                <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  {receiptError}
+                </div>
+              ) : null}
+
+              {receiptStatus === 'ready' && uploadedFile && receiptMeta ? (
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                  Первичная проверка пройдена. Размер: {receiptMeta.sizeLabel}. Разрешение:{' '}
+                  {receiptMeta.width}×{receiptMeta.height}. Теперь изображение можно отправить админу на ручную проверку.
+                </div>
+              ) : null}
+
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-5 text-zinc-400">
+                Пока идёт проверка изображения, кнопка отправки неактивна. Эта
+                проверка не подтверждает оплату автоматически, а только отсеивает
+                неподходящие файлы до ручной модерации администратором.
               </div>
-            ) : null}
+            </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <button
-              onClick={() => setIsPurchaseModalOpen(false)}
+              onClick={closePurchaseModal}
               className="rounded-2xl border border-white/10 px-6 py-4 text-lg font-extrabold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
             >
               Отмена
             </button>
 
-            <GlowButton disabled={submitting} onClick={submitCardPurchase}>
+            <GlowButton
+              disabled={submitting || receiptStatus !== 'ready'}
+              onClick={submitCardPurchase}
+            >
               {submitting ? 'Отправляем...' : 'Отправить на проверку'}
             </GlowButton>
           </div>
