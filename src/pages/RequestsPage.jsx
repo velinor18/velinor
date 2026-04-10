@@ -5,6 +5,7 @@ import {
   STRIKE_REASON_OPTIONS,
   getDefaultStrikeReasonCode,
   getStrikeReasonLabel,
+  getViolationSourceLabel,
 } from '../lib/violations'
 
 function generatePromoCode() {
@@ -174,6 +175,81 @@ function StrikeModal({
   )
 }
 
+function RevokeStrikeModal({
+  open,
+  item,
+  revokeNote,
+  onRevokeNoteChange,
+  onClose,
+  onConfirm,
+  processing,
+}) {
+  if (!open || !item) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-[85] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl rounded-[28px] border border-fuchsia-500/20 bg-[#0b0b18] shadow-[0_0_80px_rgba(168,85,247,0.18)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-fuchsia-500/15 px-6 py-5">
+          <div className="text-2xl font-black text-white">
+            Отменить страйк
+          </div>
+          <div className="mt-2 text-sm leading-6 text-zinc-400">
+            Пользователь: <span className="font-semibold text-white">{item.username_snapshot}</span>
+            <br />
+            Причина: <span className="font-semibold text-white">{getStrikeReasonLabel(item.reason_code)}</span>
+          </div>
+        </div>
+
+        <div className="space-y-5 p-6">
+          <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-3 text-sm leading-6 text-yellow-100/90">
+            После отмены страйка нарушение исчезнет из активного списка, у пользователя
+            снимется один череп и вернётся одно сердце.
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-bold uppercase tracking-wide text-zinc-400">
+              Комментарий к отмене
+            </label>
+
+            <textarea
+              value={revokeNote}
+              onChange={(e) => onRevokeNoteChange(e.target.value)}
+              rows={4}
+              placeholder="Можно указать, почему страйк отменён."
+              className="w-full resize-none rounded-2xl border border-fuchsia-500/20 bg-black/60 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/50"
+            />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-2xl border border-white/10 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
+            >
+              Отмена
+            </button>
+
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={processing}
+              className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-white transition hover:bg-emerald-500/20 disabled:opacity-60"
+            >
+              {processing ? 'Отменяем...' : 'Подтвердить отмену'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function getStatusLabel(status) {
   if (status === 'approved') return 'Успешно оплачено'
   if (status === 'rejected') return 'Отклонено'
@@ -196,6 +272,9 @@ export default function RequestsPage() {
   const [strikeModalItem, setStrikeModalItem] = useState(null)
   const [strikeReasonCode, setStrikeReasonCode] = useState(getDefaultStrikeReasonCode())
   const [strikeReasonText, setStrikeReasonText] = useState('')
+
+  const [revokeModalItem, setRevokeModalItem] = useState(null)
+  const [revokeNote, setRevokeNote] = useState('')
 
   const pendingRequests = useMemo(
     () => requests.filter((item) => item.status === 'pending'),
@@ -256,8 +335,9 @@ export default function RequestsPage() {
     const { data, error } = await supabase
       .from('violations')
       .select(
-        'id, user_id, username_snapshot, admin_user_id, source_type, request_id, reason_code, reason_text, created_at'
+        'id, user_id, username_snapshot, admin_user_id, source_type, request_id, reason_code, reason_text, created_at, is_revoked, revoked_at, revoke_note'
       )
+      .eq('is_revoked', false)
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -438,6 +518,50 @@ export default function RequestsPage() {
     setPageMessage('Заявка отклонена, страйк выдан')
   }
 
+  const openRevokeModal = (item) => {
+    setRevokeModalItem(item)
+    setRevokeNote('')
+  }
+
+  const closeRevokeModal = () => {
+    setRevokeModalItem(null)
+    setRevokeNote('')
+  }
+
+  const revokeStrike = async () => {
+    if (!revokeModalItem) return
+
+    setProcessingId(revokeModalItem.id)
+    setPageMessage('')
+    setPageError('')
+
+    const {
+      data: { user: adminUser },
+    } = await supabase.auth.getUser()
+
+    const { error } = await supabase
+      .from('violations')
+      .update({
+        is_revoked: true,
+        revoked_at: new Date().toISOString(),
+        revoked_by: adminUser?.id ?? null,
+        revoke_note: revokeNote.trim() || null,
+      })
+      .eq('id', revokeModalItem.id)
+
+    if (error) {
+      console.error(error)
+      setProcessingId(null)
+      setPageError('Не удалось отменить страйк')
+      return
+    }
+
+    await loadViolations()
+    setProcessingId(null)
+    closeRevokeModal()
+    setPageMessage('Страйк отменён')
+  }
+
   const restoreToPending = async (item) => {
     setProcessingId(item.id)
     setPageMessage('')
@@ -542,8 +666,8 @@ export default function RequestsPage() {
         <div>
           <h1 className="text-4xl font-black">Заявки</h1>
           <p className="mt-3 max-w-3xl text-zinc-400">
-            Здесь администратор видит новые заявки, архив, историю нарушений,
-            подтверждает оплату, отклоняет заказы и при необходимости выдаёт страйки.
+            Здесь администратор видит новые заявки, архив, историю активных нарушений,
+            подтверждает оплату, отклоняет заказы и при необходимости выдаёт или отменяет страйки.
           </p>
         </div>
 
@@ -622,7 +746,7 @@ export default function RequestsPage() {
           </div>
         ) : violations.length === 0 ? (
           <div className="rounded-[28px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 text-center text-lg text-zinc-300">
-            Нарушений пока нет.
+            Активных нарушений пока нет.
           </div>
         ) : (
           <div className="space-y-5">
@@ -641,8 +765,8 @@ export default function RequestsPage() {
                       Причина: {getStrikeReasonLabel(item.reason_code)}
                     </div>
 
-                    <div className="text-sm leading-6 text-zinc-400">
-                      {item.reason_text}
+                    <div className="text-sm leading-6 text-zinc-300">
+                      Комментарий администратора: {item.reason_text}
                     </div>
 
                     <div className="text-sm text-zinc-500">
@@ -650,12 +774,23 @@ export default function RequestsPage() {
                     </div>
 
                     <div className="text-xs uppercase tracking-wide text-zinc-600">
-                      Источник: {item.source_type}
+                      Источник: {getViolationSourceLabel(item.source_type)}
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-bold uppercase tracking-wide text-white">
-                    Страйк
+                  <div className="flex flex-col gap-3">
+                    <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-bold uppercase tracking-wide text-white">
+                      Страйк
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => openRevokeModal(item)}
+                      disabled={processingId === item.id}
+                      className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm font-bold uppercase tracking-wide text-white transition hover:bg-emerald-500/20 disabled:opacity-60"
+                    >
+                      Отменить страйк
+                    </button>
                   </div>
                 </div>
               </div>
@@ -834,6 +969,16 @@ export default function RequestsPage() {
         onClose={closeStrikeModal}
         onConfirm={rejectWithStrike}
         processing={processingId === strikeModalItem?.id}
+      />
+
+      <RevokeStrikeModal
+        open={Boolean(revokeModalItem)}
+        item={revokeModalItem}
+        revokeNote={revokeNote}
+        onRevokeNoteChange={setRevokeNote}
+        onClose={closeRevokeModal}
+        onConfirm={revokeStrike}
+        processing={processingId === revokeModalItem?.id}
       />
     </div>
   )

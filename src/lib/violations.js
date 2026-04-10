@@ -29,3 +29,10 @@ export function getStrikeReasonLabel(code) {
   const found = STRIKE_REASON_OPTIONS.find((item) => item.code === code)
   return found ? found.label : 'Нарушение'
 }
+
+export function getViolationSourceLabel(sourceType) {
+  if (sourceType === 'payment_request') return 'Заявка на оплату'
+  if (sourceType === 'chat') return 'Чат'
+  if (sourceType === 'manual') return 'Ручная модерация'
+  return 'Неизвестный источник'
+}

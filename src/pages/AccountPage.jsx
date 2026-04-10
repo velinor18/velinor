@@ -9,7 +9,10 @@ import {
   uploadAvatarBlob,
 } from '../lib/avatar'
 import { normalizeAvatarShape } from '../lib/avatarShapes'
-import { getStrikeReasonLabel } from '../lib/violations'
+import {
+  getStrikeReasonLabel,
+  getViolationSourceLabel,
+} from '../lib/violations'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
 
@@ -72,6 +75,80 @@ function StatusIcon({
   )
 }
 
+function ViolationDetailsModal({ item, onClose }) {
+  if (!item) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl rounded-[28px] border border-fuchsia-500/20 bg-[#0b0b18] shadow-[0_0_80px_rgba(168,85,247,0.18)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-fuchsia-500/15 px-6 py-5">
+          <div>
+            <div className="text-2xl font-black text-white">
+              Детали нарушения
+            </div>
+            <div className="mt-1 text-sm text-zinc-400">
+              Полная информация по подтверждённому нарушению
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-fuchsia-500/15 bg-white/5 px-3 py-2 text-zinc-300 transition hover:border-fuchsia-400/40 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-5 p-6">
+          <div className="rounded-[22px] border border-fuchsia-500/15 bg-white/[0.02] p-5">
+            <div className="text-sm uppercase tracking-wide text-zinc-500">
+              Причина
+            </div>
+            <div className="mt-3 text-2xl font-black text-white">
+              {getStrikeReasonLabel(item.reason_code)}
+            </div>
+          </div>
+
+          <div className="rounded-[22px] border border-fuchsia-500/15 bg-white/[0.02] p-5">
+            <div className="text-sm uppercase tracking-wide text-zinc-500">
+              Комментарий администратора
+            </div>
+            <div className="mt-3 whitespace-pre-wrap text-base leading-7 text-zinc-200">
+              {item.reason_text || 'Комментарий отсутствует'}
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-[22px] border border-fuchsia-500/15 bg-white/[0.02] p-5">
+              <div className="text-sm uppercase tracking-wide text-zinc-500">
+                Дата
+              </div>
+              <div className="mt-3 text-base text-zinc-200">
+                {new Date(item.created_at).toLocaleString('ru-RU')}
+              </div>
+            </div>
+
+            <div className="rounded-[22px] border border-fuchsia-500/15 bg-white/[0.02] p-5">
+              <div className="text-sm uppercase tracking-wide text-zinc-500">
+                Источник
+              </div>
+              <div className="mt-3 text-base text-zinc-200">
+                {getViolationSourceLabel(item.source_type)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AccountPage({ user, profile, profileLoading }) {
   const navigate = useNavigate()
   const avatarUrlRef = useRef('')
@@ -83,6 +160,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [shapeSaving, setShapeSaving] = useState(false)
   const [violations, setViolations] = useState([])
   const [violationsLoading, setViolationsLoading] = useState(true)
+  const [selectedViolation, setSelectedViolation] = useState(null)
   const [avatarMessage, setAvatarMessage] = useState('')
   const [avatarError, setAvatarError] = useState('')
 
@@ -186,8 +264,9 @@ export default function AccountPage({ user, profile, profileLoading }) {
       const { data, error } = await supabase
         .from('violations')
         .select(
-          'id, source_type, reason_code, reason_text, created_at'
+          'id, source_type, reason_code, reason_text, created_at, is_revoked'
         )
+        .eq('is_revoked', false)
         .order('created_at', { ascending: false })
 
       if (!isMounted) return
@@ -524,7 +603,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
               <div>
                 <h2 className="text-3xl font-black">История нарушений</h2>
                 <p className="mt-3 max-w-2xl text-zinc-400">
-                  Здесь отображаются подтверждённые нарушения по вашему аккаунту.
+                  Нажмите на нарушение, чтобы открыть его в полном виде.
                 </p>
               </div>
 
@@ -544,34 +623,32 @@ export default function AccountPage({ user, profile, profileLoading }) {
             ) : (
               <div className="mt-6 space-y-4">
                 {violations.map((item) => (
-                  <div
+                  <button
                     key={item.id}
-                    className="rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-5"
+                    type="button"
+                    onClick={() => setSelectedViolation(item)}
+                    className="block w-full rounded-[24px] border border-fuchsia-500/15 bg-white/[0.02] p-5 text-left transition hover:border-fuchsia-400/30 hover:bg-fuchsia-900/10"
                   >
                     <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-start">
                       <div className="space-y-3">
                         <div className="text-xl font-black text-white">
-                          {getStrikeReasonLabel(item.reason_code)}
+                          Причина: {getStrikeReasonLabel(item.reason_code)}
                         </div>
 
-                        <div className="text-sm leading-7 text-zinc-300">
-                          {item.reason_text}
+                        <div className="text-sm leading-7 text-zinc-300 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">
+                          Комментарий администратора: {item.reason_text || 'Комментарий отсутствует'}
                         </div>
 
                         <div className="text-sm text-zinc-500">
                           Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
                         </div>
-
-                        <div className="text-xs uppercase tracking-wide text-zinc-600">
-                          Источник: {item.source_type}
-                        </div>
                       </div>
 
                       <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-bold uppercase tracking-wide text-white">
-                        Страйк
+                        Открыть
                       </div>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -658,6 +735,11 @@ export default function AccountPage({ user, profile, profileLoading }) {
           </button>
         </div>
       </div>
+
+      <ViolationDetailsModal
+        item={selectedViolation}
+        onClose={() => setSelectedViolation(null)}
+      />
     </div>
   )
 }
