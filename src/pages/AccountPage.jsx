@@ -264,8 +264,9 @@ export default function AccountPage({ user, profile, profileLoading }) {
       const { data, error } = await supabase
         .from('violations')
         .select(
-          'id, source_type, reason_code, reason_text, created_at, is_revoked'
+          'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
         )
+        .eq('user_id', user.id)
         .eq('is_revoked', false)
         .order('created_at', { ascending: false })
 
@@ -292,14 +293,16 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const isAdmin = profileView?.role === 'admin'
 
   const heartsLeft = useMemo(() => {
+    if (isAdmin) return 3
     const value = Number(profileView?.hearts_left ?? 3)
     return Math.max(0, Math.min(3, value))
-  }, [profileView?.hearts_left])
+  }, [profileView?.hearts_left, isAdmin])
 
   const strikesCount = useMemo(() => {
+    if (isAdmin) return 0
     const value = Number(profileView?.strikes_count ?? 0)
     return Math.max(0, Math.min(3, value))
-  }, [profileView?.strikes_count])
+  }, [profileView?.strikes_count, isAdmin])
 
   const blockedUntilText = profileView?.blocked_until
     ? new Date(profileView.blocked_until).toLocaleString('ru-RU')
@@ -517,7 +520,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
             </div>
           ) : null}
 
-          {profileView?.is_blocked ? (
+          {!isAdmin && profileView?.is_blocked ? (
             <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm leading-6 text-red-200">
               Аккаунт сейчас заблокирован.
               <br />

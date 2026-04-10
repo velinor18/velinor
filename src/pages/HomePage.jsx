@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
@@ -257,6 +257,23 @@ export default function HomePage({ user, profile }) {
   const [toast, setToast] = useState('')
 
   const maxReceiptMb = Math.floor(MAX_RECEIPT_SIZE / (1024 * 1024))
+  const isAdmin = profile?.role === 'admin'
+
+  const isBlocked = useMemo(() => {
+    if (!profile || isAdmin) return false
+    if (!profile.is_blocked) return false
+    if (!profile.blocked_until) return true
+    return new Date(profile.blocked_until).getTime() > Date.now()
+  }, [profile, isAdmin])
+
+  const blockedUntilText = profile?.blocked_until
+    ? new Date(profile.blocked_until).toLocaleString('ru-RU')
+    : '—'
+
+  const blockMessage = useMemo(() => {
+    if (!isBlocked) return ''
+    return `Ваш аккаунт временно заблокирован. Новые заявки недоступны до ${blockedUntilText}.`
+  }, [isBlocked, blockedUntilText])
 
   const replaceReceiptPreviewUrl = (nextUrl) => {
     setReceiptPreviewUrl((prevUrl) => {
@@ -277,8 +294,19 @@ export default function HomePage({ user, profile }) {
     replaceReceiptPreviewUrl('')
   }
 
+  useEffect(() => {
+    if (isBlocked) {
+      resetReceiptSelection()
+    }
+  }, [isBlocked])
+
   const runReceiptCheck = async (file) => {
     if (!file) return
+
+    if (isBlocked) {
+      setToast(blockMessage)
+      return
+    }
 
     setReceiptStatus('checking')
     setReceiptError('')
@@ -322,7 +350,7 @@ export default function HomePage({ user, profile }) {
   }, [toast])
 
   useEffect(() => {
-    if (!isPurchaseModalOpen) return
+    if (!isPurchaseModalOpen || isBlocked) return
 
     const handlePaste = (event) => {
       const items = Array.from(event.clipboardData?.items ?? [])
@@ -347,7 +375,7 @@ export default function HomePage({ user, profile }) {
     return () => {
       window.removeEventListener('paste', handlePaste)
     }
-  }, [isPurchaseModalOpen])
+  }, [isPurchaseModalOpen, isBlocked])
 
   const stats = [
     { value: '250+', label: 'довольных клиентов' },
@@ -372,6 +400,11 @@ export default function HomePage({ user, profile }) {
   }
 
   const openReceiptPicker = () => {
+    if (isBlocked) {
+      setToast(blockMessage)
+      return
+    }
+
     receiptInputRef.current?.click()
   }
 
@@ -381,6 +414,13 @@ export default function HomePage({ user, profile }) {
   }
 
   const openPurchaseModal = (plan) => {
+    setSelectedPlan(plan)
+    setPaymentMethod('card')
+    resetReceiptSelection()
+    setIsPurchaseModalOpen(true)
+  }
+
+  const handlePurchaseAction = (plan) => {
     setSelectedPlan(plan)
     setPaymentMethod('card')
     resetReceiptSelection()
@@ -398,6 +438,12 @@ export default function HomePage({ user, profile }) {
 
   const handleReceiptDrop = async (event) => {
     event.preventDefault()
+
+    if (isBlocked) {
+      setToast(blockMessage)
+      return
+    }
+
     const file = event.dataTransfer?.files?.[0]
 
     if (!file) return
@@ -488,6 +534,11 @@ export default function HomePage({ user, profile }) {
       return
     }
 
+    if (isBlocked) {
+      setToast(blockMessage)
+      return
+    }
+
     if (receiptStatus === 'checking') {
       setToast('Дождитесь завершения проверки изображения')
       return
@@ -533,8 +584,14 @@ export default function HomePage({ user, profile }) {
 
     if (insertError) {
       console.error(insertError)
-      setToast('Не удалось сохранить заявку')
       setSubmitting(false)
+
+      if (insertError.message === 'ACCOUNT_BLOCKED') {
+        setToast(blockMessage)
+        return
+      }
+
+      setToast('Не удалось сохранить заявку')
       return
     }
 
@@ -548,6 +605,11 @@ export default function HomePage({ user, profile }) {
   }
 
   const submitCryptoAttempt = () => {
+    if (isBlocked) {
+      setToast(blockMessage)
+      return
+    }
+
     setIsCryptoModalOpen(false)
     setToast('Криптооплата пока недоступна в этой версии')
   }
@@ -570,6 +632,14 @@ export default function HomePage({ user, profile }) {
       </div>
 
       <main className="relative z-10 mx-auto max-w-7xl px-4 pb-24 sm:px-6 lg:px-8">
+        {user && isBlocked ? (
+          <div className="mt-8 rounded-[28px] border border-red-500/20 bg-red-500/10 p-5 text-sm leading-7 text-red-100 sm:mt-10 sm:text-base">
+            Ваш аккаунт временно заблокирован. Отправка новых заявок сейчас недоступна.
+            <br />
+            Срок блокировки до: <span className="font-bold">{blockedUntilText}</span>
+          </div>
+        ) : null}
+
         <section
           id="hero"
           className="scroll-mt-28 flex min-h-[72vh] items-center justify-center py-20 sm:py-28"
@@ -649,8 +719,8 @@ export default function HomePage({ user, profile }) {
                     </div>
                     <div className="mt-2 text-lg text-zinc-500">навсегда</div>
 
-                    <GlowButton className="mt-10 w-full" onClick={() => openPurchaseModal(plan)}>
-                      Купить подписку
+                    <GlowButton className="mt-10 w-full" onClick={() => handlePurchaseAction(plan)}>
+                      {isBlocked ? 'Проверить статус' : 'Купить подписку'}
                     </GlowButton>
                   </div>
                 </div>
@@ -761,37 +831,23 @@ export default function HomePage({ user, profile }) {
         </footer>
       </main>
 
-      {isWidgetVisible ? (
-        <div className="fixed bottom-4 right-4 z-30 hidden w-[260px] rounded-3xl border border-cyan-400/20 bg-cyan-900/90 p-4 text-white shadow-[0_0_45px_rgba(34,211,238,0.18)] backdrop-blur-xl lg:block">
-          <button
-            onClick={closeWidget}
-            className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-sm text-white transition hover:bg-white/20"
-          >
-            ✕
-          </button>
-
-          <div className="flex items-start gap-3 pr-7">
-            <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-sm">
-              ✈
-            </div>
-
-            <div>
-              <div className="text-base font-bold">Акции и новости</div>
-              <p className="mt-1 text-sm font-semibold text-cyan-50">@VelynoriusBot</p>
-              <p className="mt-2 text-xs leading-5 text-cyan-100/80">
-                Подписывайтесь, чтобы видеть обновления, бонусы и новые предложения.
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <ModalShell
         open={isPurchaseModalOpen}
         title={`Оплата: ${selectedPlan.title}`}
         onClose={closePurchaseModal}
       >
         <div className="space-y-6">
+          {isBlocked ? (
+            <div className="rounded-[22px] border border-red-500/20 bg-red-500/10 p-5 text-red-100">
+              <div className="text-xl font-black">Покупка временно недоступна</div>
+              <div className="mt-3 text-sm leading-7 text-red-100/90">
+                Ваш аккаунт заблокирован, поэтому новые заявки сейчас отправлять нельзя.
+                <br />
+                Срок блокировки до: <span className="font-bold">{blockedUntilText}</span>
+              </div>
+            </div>
+          ) : null}
+
           {!user ? (
             <div className="rounded-[22px] border border-yellow-600/30 bg-yellow-500/10 p-4 text-yellow-100/90">
               Чтобы отправить заявку на проверку, сначала войдите в аккаунт.
@@ -821,26 +877,33 @@ export default function HomePage({ user, profile }) {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <button
-                onClick={() => setPaymentMethod('card')}
+                onClick={() => !isBlocked && setPaymentMethod('card')}
+                disabled={isBlocked}
                 className={`rounded-2xl border px-4 py-4 text-lg transition ${
                   paymentMethod === 'card'
                     ? 'border-fuchsia-500 bg-fuchsia-700/10 text-fuchsia-300'
                     : 'border-yellow-200/40 bg-white/5 text-zinc-300'
-                }`}
+                } disabled:opacity-50`}
               >
                 Банковская карта
               </button>
 
               <button
                 onClick={() => {
+                  if (isBlocked) {
+                    setToast(blockMessage)
+                    return
+                  }
+
                   setPaymentMethod('crypto')
                   setIsCryptoModalOpen(true)
                 }}
+                disabled={isBlocked}
                 className={`rounded-2xl border px-4 py-4 text-lg transition ${
                   paymentMethod === 'crypto'
                     ? 'border-fuchsia-500 bg-fuchsia-700/10 text-fuchsia-300'
                     : 'border-yellow-200/40 bg-white/5 text-zinc-300'
-                }`}
+                } disabled:opacity-50`}
               >
                 Криптовалюта
               </button>
@@ -888,7 +951,8 @@ export default function HomePage({ user, profile }) {
               <button
                 type="button"
                 onClick={openReceiptPicker}
-                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                disabled={isBlocked}
+                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-50"
               >
                 Выбрать файл
               </button>
@@ -921,7 +985,8 @@ export default function HomePage({ user, profile }) {
                     <button
                       type="button"
                       onClick={openReceiptPicker}
-                      className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                      disabled={isBlocked}
+                      className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-50"
                     >
                       Заменить
                     </button>
@@ -947,7 +1012,8 @@ export default function HomePage({ user, profile }) {
                   <button
                     type="button"
                     onClick={openReceiptPicker}
-                    className="mt-6 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                    disabled={isBlocked}
+                    className="mt-6 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-50"
                   >
                     Выбрать изображение
                   </button>
@@ -992,10 +1058,14 @@ export default function HomePage({ user, profile }) {
             </button>
 
             <GlowButton
-              disabled={submitting || receiptStatus !== 'ready'}
+              disabled={submitting || receiptStatus !== 'ready' || isBlocked}
               onClick={submitCardPurchase}
             >
-              {submitting ? 'Отправляем...' : 'Отправить на проверку'}
+              {isBlocked
+                ? 'Недоступно'
+                : submitting
+                  ? 'Отправляем...'
+                  : 'Отправить на проверку'}
             </GlowButton>
           </div>
         </div>
@@ -1208,6 +1278,17 @@ export default function HomePage({ user, profile }) {
         onClose={() => setIsCryptoModalOpen(false)}
       >
         <div className="space-y-6">
+          {isBlocked ? (
+            <div className="rounded-[22px] border border-red-500/20 bg-red-500/10 p-5 text-red-100">
+              <div className="text-xl font-black">Функция недоступна</div>
+              <div className="mt-3 text-sm leading-7 text-red-100/90">
+                Ваш аккаунт заблокирован.
+                <br />
+                Срок блокировки до: <span className="font-bold">{blockedUntilText}</span>
+              </div>
+            </div>
+          ) : null}
+
           <div className="rounded-[22px] border border-yellow-600/30 bg-yellow-500/10 p-4 text-yellow-100/90">
             Этот раздел показан как демонстрация интерфейса. В текущей версии криптооплата
             не работает.
@@ -1219,12 +1300,13 @@ export default function HomePage({ user, profile }) {
               {cryptoOptions.map((item) => (
                 <button
                   key={item.symbol}
-                  onClick={() => setSelectedCrypto(item.symbol)}
+                  onClick={() => !isBlocked && setSelectedCrypto(item.symbol)}
+                  disabled={isBlocked}
                   className={`rounded-2xl border px-4 py-4 text-left transition ${
                     selectedCrypto === item.symbol
                       ? 'border-fuchsia-500 bg-fuchsia-700/10'
                       : 'border-white/10 bg-white/[0.02]'
-                  }`}
+                  } disabled:opacity-50`}
                 >
                   <div className="text-lg font-black">{item.symbol}</div>
                   <div className="mt-1 text-sm text-zinc-400">Сеть: {item.network}</div>
@@ -1239,12 +1321,13 @@ export default function HomePage({ user, profile }) {
               {walletOptions.map((wallet) => (
                 <button
                   key={wallet}
-                  onClick={() => setSelectedWallet(wallet)}
+                  onClick={() => !isBlocked && setSelectedWallet(wallet)}
+                  disabled={isBlocked}
                   className={`rounded-2xl border px-4 py-4 text-left transition ${
                     selectedWallet === wallet
                       ? 'border-fuchsia-500 bg-fuchsia-700/10'
                       : 'border-white/10 bg-white/[0.02]'
-                  }`}
+                  } disabled:opacity-50`}
                 >
                   <div className="text-lg font-bold">{wallet}</div>
                 </button>
@@ -1263,8 +1346,8 @@ export default function HomePage({ user, profile }) {
             </div>
           </div>
 
-          <GlowButton className="w-full" onClick={submitCryptoAttempt}>
-            Уже оплатил
+          <GlowButton className="w-full" onClick={submitCryptoAttempt} disabled={isBlocked}>
+            {isBlocked ? 'Недоступно' : 'Уже оплатил'}
           </GlowButton>
         </div>
       </ModalShell>
