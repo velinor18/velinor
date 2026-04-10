@@ -9,12 +9,12 @@ function ShapePreview({ shape, active }) {
 
   return (
     <div
-      className={`flex h-14 w-14 items-center justify-center bg-fuchsia-500/20 p-[2px] ${
+      className={`flex h-20 w-20 items-center justify-center bg-fuchsia-500/20 p-[3px] transition sm:h-24 sm:w-24 ${
         classes.optionOuter
-      } ${active ? 'shadow-[0_0_25px_rgba(168,85,247,0.35)]' : ''}`}
+      } ${active ? 'scale-[1.03] shadow-[0_0_30px_rgba(168,85,247,0.35)]' : ''}`}
     >
       <div
-        className={`flex h-full w-full items-center justify-center bg-[#090912] text-base font-black text-white ${
+        className={`flex h-full w-full items-center justify-center bg-[#090912] text-xl font-black text-white sm:text-2xl ${
           classes.optionInner
         }`}
       >
@@ -37,7 +37,7 @@ export default function AvatarShapePicker({
         Форма аватара
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {AVATAR_SHAPE_OPTIONS.map((option) => {
           const active = option.value === currentValue
 
@@ -47,19 +47,14 @@ export default function AvatarShapePicker({
               type="button"
               disabled={loading}
               onClick={() => onChange(option.value)}
-              className={`rounded-2xl border px-3 py-4 text-center transition ${
+              className={`flex items-center justify-center rounded-[24px] border p-4 transition sm:p-5 ${
                 active
                   ? 'border-fuchsia-400/50 bg-fuchsia-700/15'
                   : 'border-fuchsia-500/15 bg-white/[0.02] hover:border-fuchsia-400/35 hover:bg-fuchsia-900/10'
               } ${loading ? 'opacity-60' : ''}`}
+              aria-label={`Выбрать форму аватара: ${option.value}`}
             >
-              <div className="flex justify-center">
-                <ShapePreview shape={option.value} active={active} />
-              </div>
-
-              <div className="mt-3 text-xs font-bold uppercase tracking-wide text-zinc-200">
-                {option.label}
-              </div>
+              <ShapePreview shape={option.value} active={active} />
             </button>
           )
         })}
