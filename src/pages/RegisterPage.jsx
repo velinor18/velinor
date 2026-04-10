@@ -14,7 +14,7 @@ export default function RegisterPage({ user }) {
 
   useEffect(() => {
     if (user) {
-      navigate('/account')
+      navigate('/profile')
     }
   }, [user, navigate])
 
@@ -64,7 +64,7 @@ export default function RegisterPage({ user }) {
     }
 
     if (data?.session) {
-      navigate('/account')
+      navigate('/profile')
       return
     }
 

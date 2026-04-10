@@ -1,9 +1,70 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import AvatarUploader from '../components/AvatarUploader'
 import { supabase } from '../lib/supabase'
+import {
+  downloadAvatarAsObjectUrl,
+  revokeObjectUrl,
+  uploadAvatarBlob,
+} from '../lib/avatar'
+
+const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
+
+const PROFILE_SELECT_QUERY = `
+  id,
+  username,
+  role,
+  created_at,
+  avatar_path,
+  hearts_left,
+  strikes_count,
+  is_blocked,
+  blocked_until,
+  telegram_user_id,
+  telegram_username
+`
+
+function writeCachedProfile(userId, profile) {
+  try {
+    localStorage.setItem(`${PROFILE_CACHE_PREFIX}${userId}`, JSON.stringify(profile))
+  } catch {
+    // ignore cache write errors
+  }
+}
+
+function InfoCard({ label, value, valueClassName = '' }) {
+  return (
+    <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
+      <div className="text-sm uppercase tracking-wide text-zinc-500">{label}</div>
+      <div className={`mt-3 break-words text-xl font-black text-white sm:text-2xl ${valueClassName}`}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function StatusIcon({ active, children, activeClassName, inactiveClassName }) {
+  return (
+    <div
+      className={`flex h-14 w-14 items-center justify-center rounded-2xl border text-2xl shadow-[0_0_30px_rgba(0,0,0,0.18)] sm:h-16 sm:w-16 sm:text-3xl ${
+        active ? activeClassName : inactiveClassName
+      }`}
+    >
+      {children}
+    </div>
+  )
+}
 
 export default function AccountPage({ user, profile, profileLoading }) {
   const navigate = useNavigate()
+
+  const [profileView, setProfileView] = useState(profile)
+  const [avatarObjectUrl, setAvatarObjectUrl] = useState('')
+  const [avatarLoading, setAvatarLoading] = useState(false)
+  const [avatarSaving, setAvatarSaving] = useState(false)
+  const [avatarMessage, setAvatarMessage] = useState('')
+  const [avatarError, setAvatarError] = useState('')
+  const [avatarRefreshKey, setAvatarRefreshKey] = useState(0)
 
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -12,11 +73,125 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [passwordMessage, setPasswordMessage] = useState('')
   const [passwordError, setPasswordError] = useState('')
 
+  useEffect(() => {
+    setProfileView(profile ?? null)
+  }, [profile])
+
+  useEffect(() => {
+    if (!avatarMessage) return
+    const timer = setTimeout(() => setAvatarMessage(''), 2600)
+    return () => clearTimeout(timer)
+  }, [avatarMessage])
+
+  useEffect(() => {
+    if (!avatarError) return
+    const timer = setTimeout(() => setAvatarError(''), 3200)
+    return () => clearTimeout(timer)
+  }, [avatarError])
+
+  useEffect(() => {
+    let isMounted = true
+    let currentUrl = null
+
+    const loadAvatar = async () => {
+      if (!profileView?.avatar_path) {
+        if (isMounted) {
+          setAvatarObjectUrl('')
+          setAvatarLoading(false)
+        }
+        return
+      }
+
+      setAvatarLoading(true)
+
+      const url = await downloadAvatarAsObjectUrl(profileView.avatar_path)
+
+      if (!isMounted) {
+        revokeObjectUrl(url)
+        return
+      }
+
+      currentUrl = url
+
+      setAvatarObjectUrl(url ?? '')
+      setAvatarLoading(false)
+    }
+
+    loadAvatar()
+
+    return () => {
+      isMounted = false
+      if (currentUrl) {
+        revokeObjectUrl(currentUrl)
+      }
+    }
+  }, [profileView?.avatar_path, avatarRefreshKey])
+
+  const isAdmin = profileView?.role === 'admin'
+
+  const heartsLeft = useMemo(() => {
+    const value = Number(profileView?.hearts_left ?? 3)
+    return Math.max(0, Math.min(3, value))
+  }, [profileView?.hearts_left])
+
+  const strikesCount = useMemo(() => {
+    const value = Number(profileView?.strikes_count ?? 0)
+    return Math.max(0, Math.min(3, value))
+  }, [profileView?.strikes_count])
+
+  const blockedUntilText = profileView?.blocked_until
+    ? new Date(profileView.blocked_until).toLocaleString('ru-RU')
+    : '—'
+
   const handleSignOut = async () => {
     if (!supabase) return
 
     await supabase.auth.signOut()
     navigate('/')
+  }
+
+  const handleAvatarSave = async (croppedBlob) => {
+    if (!supabase || !user) {
+      setAvatarError('Сессия не найдена')
+      return false
+    }
+
+    setAvatarSaving(true)
+    setAvatarMessage('')
+    setAvatarError('')
+
+    const { path, error: uploadError } = await uploadAvatarBlob(user.id, croppedBlob)
+
+    if (uploadError || !path) {
+      console.error(uploadError)
+      setAvatarSaving(false)
+      setAvatarError('Не удалось загрузить аватар')
+      return false
+    }
+
+    const { data, error: updateError } = await supabase
+      .from('profiles')
+      .update({
+        avatar_path: path,
+      })
+      .eq('id', user.id)
+      .select(PROFILE_SELECT_QUERY)
+      .single()
+
+    if (updateError || !data) {
+      console.error(updateError)
+      setAvatarSaving(false)
+      setAvatarError('Не удалось сохранить путь аватара в профиле')
+      return false
+    }
+
+    setProfileView(data)
+    writeCachedProfile(user.id, data)
+    setAvatarRefreshKey((prev) => prev + 1)
+    setAvatarSaving(false)
+    setAvatarMessage('Аватар успешно обновлён')
+
+    return true
   }
 
   const handleChangePassword = async (e) => {
@@ -80,112 +255,194 @@ export default function AccountPage({ user, profile, profileLoading }) {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-16 sm:px-6 lg:px-8">
-      <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">
-        <h1 className="text-4xl font-black">Аккаунт</h1>
+    <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
+      <div className="grid gap-8 xl:grid-cols-[360px_1fr]">
+        <AvatarUploader
+          username={profileView?.username ?? user?.email ?? 'U'}
+          avatarUrl={avatarObjectUrl}
+          loading={avatarLoading || profileLoading}
+          saving={avatarSaving}
+          onSave={handleAvatarSave}
+        />
 
-        <div className="mt-8 grid gap-5 md:grid-cols-3">
-          <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
-            <div className="text-sm uppercase tracking-wide text-zinc-500">Логин</div>
-            <div className="mt-3 text-2xl font-black text-white">
-              {profileLoading ? 'Загрузка...' : profile?.username ?? '—'}
-            </div>
-          </div>
+        <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">
+          <h1 className="text-4xl font-black">Профиль</h1>
 
-          <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
-            <div className="text-sm uppercase tracking-wide text-zinc-500">Роль</div>
-            <div className="mt-3 text-2xl font-black text-white">
-              {profileLoading ? 'Загрузка...' : profile?.role ?? 'user'}
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
-            <div className="text-sm uppercase tracking-wide text-zinc-500">Технический email</div>
-            <div className="mt-3 break-all text-lg font-semibold text-zinc-200">
-              {user?.email ?? '—'}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-8 rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6 text-zinc-300">
-          {profileLoading ? (
-            <span>Профиль ещё догружается...</span>
-          ) : (
-            <>
-              Здесь находится ваш аккаунт. Снизу можно безопасно изменить пароль,
-              указав текущий пароль и новый.
-            </>
-          )}
-        </div>
-
-        <div className="mt-8 rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
-          <h2 className="text-3xl font-black">Смена пароля</h2>
-          <p className="mt-3 max-w-2xl text-zinc-400">
-            Для смены пароля введите текущий пароль, затем новый пароль и повторите его.
+          <p className="mt-3 max-w-3xl text-zinc-400">
+            Здесь находится ваш профиль. Обычный пользователь видит только важную
+            информацию о своём аккаунте. Дополнительные технические поля доступны только администратору.
           </p>
 
-          <form className="mt-8 space-y-5" onSubmit={handleChangePassword}>
-            <div>
-              <label className="mb-2 block text-sm text-zinc-300">Текущий пароль</label>
-              <input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                className="w-full rounded-2xl border border-fuchsia-500/20 bg-black/60 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/50"
-                placeholder="Введите текущий пароль"
-              />
+          {avatarMessage ? (
+            <div className="mt-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+              {avatarMessage}
             </div>
+          ) : null}
 
-            <div>
-              <label className="mb-2 block text-sm text-zinc-300">Новый пароль</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="w-full rounded-2xl border border-fuchsia-500/20 bg-black/60 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/50"
-                placeholder="Минимум 6 символов"
-              />
+          {avatarError ? (
+            <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              {avatarError}
             </div>
+          ) : null}
 
-            <div>
-              <label className="mb-2 block text-sm text-zinc-300">Повторите новый пароль</label>
-              <input
-                type="password"
-                value={repeatPassword}
-                onChange={(e) => setRepeatPassword(e.target.value)}
-                className="w-full rounded-2xl border border-fuchsia-500/20 bg-black/60 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/50"
-                placeholder="Повторите новый пароль"
-              />
+          {profileView?.is_blocked ? (
+            <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm leading-6 text-red-200">
+              Аккаунт сейчас заблокирован.
+              <br />
+              Срок блокировки до: {blockedUntilText}
             </div>
+          ) : null}
 
-            {passwordError ? (
-              <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                {passwordError}
-              </div>
+          <div className="mt-8 grid gap-5 md:grid-cols-2">
+            <InfoCard
+              label="Логин"
+              value={profileLoading ? 'Загрузка...' : profileView?.username ?? '—'}
+            />
+
+            <InfoCard
+              label="Telegram"
+              value={
+                profileLoading
+                  ? 'Загрузка...'
+                  : profileView?.telegram_username
+                    ? `@${profileView.telegram_username}`
+                    : 'Не подключён'
+              }
+            />
+
+            {isAdmin ? (
+              <>
+                <InfoCard
+                  label="Роль"
+                  value={profileLoading ? 'Загрузка...' : profileView?.role ?? '—'}
+                />
+
+                <InfoCard
+                  label="Технический email"
+                  value={user?.email ?? '—'}
+                  valueClassName="text-lg font-semibold text-zinc-200"
+                />
+              </>
             ) : null}
+          </div>
 
-            {passwordMessage ? (
-              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-                {passwordMessage}
+          <div className="mt-8 grid gap-5 lg:grid-cols-2">
+            <div className="rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
+              <div className="text-sm uppercase tracking-wide text-zinc-500">
+                Сердца
               </div>
-            ) : null}
 
-            <button
-              type="submit"
-              disabled={passwordLoading}
-              className="w-full rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
-            >
-              {passwordLoading ? 'Меняем пароль...' : 'Изменить пароль'}
-            </button>
-          </form>
+              <div className="mt-4 flex items-center gap-3">
+                {[0, 1, 2].map((index) => (
+                  <StatusIcon
+                    key={`heart-${index}`}
+                    active={index < heartsLeft}
+                    activeClassName="border-red-400/30 bg-red-500/10 text-red-400"
+                    inactiveClassName="border-white/10 bg-white/[0.03] text-zinc-700"
+                  >
+                    ❤
+                  </StatusIcon>
+                ))}
+              </div>
+
+              <p className="mt-4 text-sm leading-6 text-zinc-400">
+                Сердца показывают, сколько предупреждений ещё осталось до полного лимита.
+              </p>
+            </div>
+
+            <div className="rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
+              <div className="text-sm uppercase tracking-wide text-zinc-500">
+                Страйки
+              </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                {[0, 1, 2].map((index) => (
+                  <StatusIcon
+                    key={`skull-${index}`}
+                    active={index < strikesCount}
+                    activeClassName="border-zinc-400/20 bg-zinc-100/10 text-zinc-100"
+                    inactiveClassName="border-white/10 bg-white/[0.03] text-zinc-700"
+                  >
+                    ☠
+                  </StatusIcon>
+                ))}
+              </div>
+
+              <p className="mt-4 text-sm leading-6 text-zinc-400">
+                Страйки показывают количество уже зафиксированных нарушений.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-8 rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
+            <h2 className="text-3xl font-black">Смена пароля</h2>
+            <p className="mt-3 max-w-2xl text-zinc-400">
+              Для смены пароля введите текущий пароль, затем новый пароль и повторите его.
+            </p>
+
+            <form className="mt-8 space-y-5" onSubmit={handleChangePassword}>
+              <div>
+                <label className="mb-2 block text-sm text-zinc-300">Текущий пароль</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="w-full rounded-2xl border border-fuchsia-500/20 bg-black/60 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/50"
+                  placeholder="Введите текущий пароль"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-zinc-300">Новый пароль</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full rounded-2xl border border-fuchsia-500/20 bg-black/60 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/50"
+                  placeholder="Минимум 6 символов"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-zinc-300">Повторите новый пароль</label>
+                <input
+                  type="password"
+                  value={repeatPassword}
+                  onChange={(e) => setRepeatPassword(e.target.value)}
+                  className="w-full rounded-2xl border border-fuchsia-500/20 bg-black/60 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/50"
+                  placeholder="Повторите новый пароль"
+                />
+              </div>
+
+              {passwordError ? (
+                <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  {passwordError}
+                </div>
+              ) : null}
+
+              {passwordMessage ? (
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                  {passwordMessage}
+                </div>
+              ) : null}
+
+              <button
+                type="submit"
+                disabled={passwordLoading}
+                className="w-full rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
+              >
+                {passwordLoading ? 'Меняем пароль...' : 'Изменить пароль'}
+              </button>
+            </form>
+          </div>
+
+          <button
+            onClick={handleSignOut}
+            className="mt-8 rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
+          >
+            Выйти
+          </button>
         </div>
-
-        <button
-          onClick={handleSignOut}
-          className="mt-8 rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
-        >
-          Выйти
-        </button>
       </div>
     </div>
   )

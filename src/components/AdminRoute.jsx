@@ -22,7 +22,7 @@ export default function AdminRoute({
   }
 
   if (profile?.role !== 'admin') {
-    return <Navigate to="/account" replace />
+    return <Navigate to="/profile" replace />
   }
 
   return children

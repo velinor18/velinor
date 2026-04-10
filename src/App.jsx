@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import Header from './components/Header'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
@@ -41,6 +41,20 @@ function clearCachedProfile(userId) {
     // ignore
   }
 }
+
+const PROFILE_SELECT_QUERY = `
+  id,
+  username,
+  role,
+  created_at,
+  avatar_path,
+  hearts_left,
+  strikes_count,
+  is_blocked,
+  blocked_until,
+  telegram_user_id,
+  telegram_username
+`
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -135,7 +149,7 @@ export default function App() {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const { data, error } = await supabase
           .from('profiles')
-          .select('id, username, role, created_at')
+          .select(PROFILE_SELECT_QUERY)
           .eq('id', user.id)
           .maybeSingle()
 
@@ -186,7 +200,7 @@ export default function App() {
         />
 
         <Route
-          path="/account"
+          path="/profile"
           element={
             <ProtectedRoute user={user} authLoading={authLoading}>
               <AccountPage
@@ -197,6 +211,8 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+        <Route path="/account" element={<Navigate to="/profile" replace />} />
 
         <Route
           path="/requests"

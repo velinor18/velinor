@@ -13,7 +13,7 @@ export default function LoginPage({ user }) {
 
   useEffect(() => {
     if (user) {
-      navigate('/account')
+      navigate('/profile')
     }
   }, [user, navigate])
 
@@ -52,7 +52,7 @@ export default function LoginPage({ user }) {
       return
     }
 
-    navigate('/account')
+    navigate('/profile')
   }
 
   return (
