@@ -52,7 +52,7 @@ export function validateAvatarFile(file) {
 
 export function getAvatarStoragePath(userId, mimeType = 'image/jpeg') {
   const ext = getExtensionByMimeType(mimeType)
-  return `${userId}/avatar.${ext}`
+  return `${userId}/avatar-${Date.now()}.${ext}`
 }
 
 export async function uploadAvatarBlob(userId, blob) {
@@ -69,8 +69,8 @@ export async function uploadAvatarBlob(userId, blob) {
   const { error } = await supabase.storage
     .from('profile-avatars')
     .upload(path, blob, {
-      upsert: true,
-      cacheControl: '3600',
+      upsert: false,
+      cacheControl: '60',
       contentType: safeMimeType,
     })
 
@@ -80,7 +80,19 @@ export async function uploadAvatarBlob(userId, blob) {
   }
 }
 
-export async function downloadAvatarAsObjectUrl(path, attempts = 4, delayMs = 300) {
+export async function removeAvatarByPath(path) {
+  if (!supabase || !path) return
+
+  const { error } = await supabase.storage
+    .from('profile-avatars')
+    .remove([path])
+
+  if (error) {
+    console.error(error)
+  }
+}
+
+export async function downloadAvatarAsObjectUrl(path, attempts = 4, delayMs = 250) {
   if (!supabase || !path) return null
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -110,31 +122,36 @@ export async function getCroppedAvatarBlob(
   imageSrc,
   cropPixels,
   mimeType = 'image/jpeg',
-  quality = 0.92
+  quality = 0.86,
+  maxSize = 512
 ) {
   const image = await createImage(imageSrc)
+
+  const sourceWidth = Math.max(1, Math.round(cropPixels.width))
+  const sourceHeight = Math.max(1, Math.round(cropPixels.height))
+  const sourceX = Math.round(cropPixels.x)
+  const sourceY = Math.round(cropPixels.y)
+
+  const scale = Math.min(1, maxSize / Math.max(sourceWidth, sourceHeight))
+  const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+  const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
 
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
 
-  const width = Math.max(1, Math.round(cropPixels.width))
-  const height = Math.max(1, Math.round(cropPixels.height))
-  const x = Math.round(cropPixels.x)
-  const y = Math.round(cropPixels.y)
-
-  canvas.width = width
-  canvas.height = height
+  canvas.width = targetWidth
+  canvas.height = targetHeight
 
   ctx.drawImage(
     image,
-    x,
-    y,
-    width,
-    height,
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
     0,
     0,
-    width,
-    height
+    targetWidth,
+    targetHeight
   )
 
   const safeMimeType = getSafeMimeType(mimeType)

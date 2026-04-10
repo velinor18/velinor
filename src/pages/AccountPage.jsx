@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import AvatarUploader from '../components/AvatarUploader'
 import { supabase } from '../lib/supabase'
 import {
   downloadAvatarAsObjectUrl,
+  removeAvatarByPath,
   revokeObjectUrl,
   uploadAvatarBlob,
 } from '../lib/avatar'
@@ -24,9 +25,12 @@ const PROFILE_SELECT_QUERY = `
   telegram_username
 `
 
-function writeCachedProfile(userId, profile) {
+function writeCachedProfile(userId, nextProfile) {
   try {
-    localStorage.setItem(`${PROFILE_CACHE_PREFIX}${userId}`, JSON.stringify(profile))
+    localStorage.setItem(
+      `${PROFILE_CACHE_PREFIX}${userId}`,
+      JSON.stringify(nextProfile)
+    )
   } catch {
     // ignore cache write errors
   }
@@ -35,15 +39,25 @@ function writeCachedProfile(userId, profile) {
 function InfoCard({ label, value, valueClassName = '' }) {
   return (
     <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
-      <div className="text-sm uppercase tracking-wide text-zinc-500">{label}</div>
-      <div className={`mt-3 break-words text-xl font-black text-white sm:text-2xl ${valueClassName}`}>
+      <div className="text-sm uppercase tracking-wide text-zinc-500">
+        {label}
+      </div>
+
+      <div
+        className={`mt-3 break-words text-xl font-black text-white sm:text-2xl ${valueClassName}`}
+      >
         {value}
       </div>
     </div>
   )
 }
 
-function StatusIcon({ active, children, activeClassName, inactiveClassName }) {
+function StatusIcon({
+  active,
+  children,
+  activeClassName,
+  inactiveClassName,
+}) {
   return (
     <div
       className={`flex h-14 w-14 items-center justify-center rounded-2xl border text-2xl shadow-[0_0_30px_rgba(0,0,0,0.18)] sm:h-16 sm:w-16 sm:text-3xl ${
@@ -57,14 +71,14 @@ function StatusIcon({ active, children, activeClassName, inactiveClassName }) {
 
 export default function AccountPage({ user, profile, profileLoading }) {
   const navigate = useNavigate()
+  const avatarUrlRef = useRef('')
 
-  const [profileView, setProfileView] = useState(profile)
+  const [profileView, setProfileView] = useState(profile ?? null)
   const [avatarObjectUrl, setAvatarObjectUrl] = useState('')
   const [avatarLoading, setAvatarLoading] = useState(false)
   const [avatarSaving, setAvatarSaving] = useState(false)
   const [avatarMessage, setAvatarMessage] = useState('')
   const [avatarError, setAvatarError] = useState('')
-  const [avatarRefreshKey, setAvatarRefreshKey] = useState(0)
 
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -78,25 +92,44 @@ export default function AccountPage({ user, profile, profileLoading }) {
   }, [profile])
 
   useEffect(() => {
+    return () => {
+      revokeObjectUrl(avatarUrlRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!avatarMessage) return
-    const timer = setTimeout(() => setAvatarMessage(''), 2600)
+
+    const timer = setTimeout(() => {
+      setAvatarMessage('')
+    }, 2600)
+
     return () => clearTimeout(timer)
   }, [avatarMessage])
 
   useEffect(() => {
     if (!avatarError) return
-    const timer = setTimeout(() => setAvatarError(''), 3200)
+
+    const timer = setTimeout(() => {
+      setAvatarError('')
+    }, 3200)
+
     return () => clearTimeout(timer)
   }, [avatarError])
 
   useEffect(() => {
     let isMounted = true
-    let currentUrl = null
 
-    const loadAvatar = async () => {
+    async function loadAvatar() {
       if (!profileView?.avatar_path) {
         if (isMounted) {
-          setAvatarObjectUrl('')
+          setAvatarObjectUrl((prevUrl) => {
+            if (prevUrl) {
+              revokeObjectUrl(prevUrl)
+            }
+            avatarUrlRef.current = ''
+            return ''
+          })
           setAvatarLoading(false)
         }
         return
@@ -104,16 +137,22 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
       setAvatarLoading(true)
 
-      const url = await downloadAvatarAsObjectUrl(profileView.avatar_path)
+      const nextUrl = await downloadAvatarAsObjectUrl(profileView.avatar_path)
 
       if (!isMounted) {
-        revokeObjectUrl(url)
+        revokeObjectUrl(nextUrl)
         return
       }
 
-      currentUrl = url
+      setAvatarObjectUrl((prevUrl) => {
+        if (prevUrl && prevUrl !== nextUrl) {
+          revokeObjectUrl(prevUrl)
+        }
 
-      setAvatarObjectUrl(url ?? '')
+        avatarUrlRef.current = nextUrl || ''
+        return nextUrl || ''
+      })
+
       setAvatarLoading(false)
     }
 
@@ -121,11 +160,8 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
     return () => {
       isMounted = false
-      if (currentUrl) {
-        revokeObjectUrl(currentUrl)
-      }
     }
-  }, [profileView?.avatar_path, avatarRefreshKey])
+  }, [profileView?.avatar_path])
 
   const isAdmin = profileView?.role === 'admin'
 
@@ -143,14 +179,20 @@ export default function AccountPage({ user, profile, profileLoading }) {
     ? new Date(profileView.blocked_until).toLocaleString('ru-RU')
     : '—'
 
-  const handleSignOut = async () => {
+  const telegramText = profileLoading
+    ? 'Загрузка...'
+    : profileView?.telegram_username
+      ? `@${profileView.telegram_username}`
+      : 'Не подключён'
+
+  async function handleSignOut() {
     if (!supabase) return
 
     await supabase.auth.signOut()
     navigate('/')
   }
 
-  const handleAvatarSave = async (croppedBlob) => {
+  async function handleAvatarSave(croppedBlob) {
     if (!supabase || !user) {
       setAvatarError('Сессия не найдена')
       return false
@@ -160,7 +202,12 @@ export default function AccountPage({ user, profile, profileLoading }) {
     setAvatarMessage('')
     setAvatarError('')
 
-    const { path, error: uploadError } = await uploadAvatarBlob(user.id, croppedBlob)
+    const previousAvatarPath = profileView?.avatar_path ?? null
+
+    const { path, error: uploadError } = await uploadAvatarBlob(
+      user.id,
+      croppedBlob
+    )
 
     if (uploadError || !path) {
       console.error(uploadError)
@@ -187,14 +234,17 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
     setProfileView(data)
     writeCachedProfile(user.id, data)
-    setAvatarRefreshKey((prev) => prev + 1)
     setAvatarSaving(false)
     setAvatarMessage('Аватар успешно обновлён')
+
+    if (previousAvatarPath && previousAvatarPath !== path) {
+      removeAvatarByPath(previousAvatarPath)
+    }
 
     return true
   }
 
-  const handleChangePassword = async (e) => {
+  async function handleChangePassword(e) {
     e.preventDefault()
     setPasswordMessage('')
     setPasswordError('')
@@ -270,7 +320,8 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
           <p className="mt-3 max-w-3xl text-zinc-400">
             Здесь находится ваш профиль. Обычный пользователь видит только важную
-            информацию о своём аккаунте. Дополнительные технические поля доступны только администратору.
+            информацию о своём аккаунте. Дополнительные технические поля доступны
+            только администратору.
           </p>
 
           {avatarMessage ? (
@@ -299,16 +350,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
               value={profileLoading ? 'Загрузка...' : profileView?.username ?? '—'}
             />
 
-            <InfoCard
-              label="Telegram"
-              value={
-                profileLoading
-                  ? 'Загрузка...'
-                  : profileView?.telegram_username
-                    ? `@${profileView.telegram_username}`
-                    : 'Не подключён'
-              }
-            />
+            <InfoCard label="Telegram" value={telegramText} />
 
             {isAdmin ? (
               <>
@@ -346,7 +388,8 @@ export default function AccountPage({ user, profile, profileLoading }) {
               </div>
 
               <p className="mt-4 text-sm leading-6 text-zinc-400">
-                Сердца показывают, сколько предупреждений ещё осталось до полного лимита.
+                Сердца показывают, сколько предупреждений ещё осталось до полного
+                лимита.
               </p>
             </div>
 
@@ -376,13 +419,18 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
           <div className="mt-8 rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
             <h2 className="text-3xl font-black">Смена пароля</h2>
+
             <p className="mt-3 max-w-2xl text-zinc-400">
-              Для смены пароля введите текущий пароль, затем новый пароль и повторите его.
+              Для смены пароля введите текущий пароль, затем новый пароль и
+              повторите его.
             </p>
 
             <form className="mt-8 space-y-5" onSubmit={handleChangePassword}>
               <div>
-                <label className="mb-2 block text-sm text-zinc-300">Текущий пароль</label>
+                <label className="mb-2 block text-sm text-zinc-300">
+                  Текущий пароль
+                </label>
+
                 <input
                   type="password"
                   value={currentPassword}
@@ -393,7 +441,10 @@ export default function AccountPage({ user, profile, profileLoading }) {
               </div>
 
               <div>
-                <label className="mb-2 block text-sm text-zinc-300">Новый пароль</label>
+                <label className="mb-2 block text-sm text-zinc-300">
+                  Новый пароль
+                </label>
+
                 <input
                   type="password"
                   value={newPassword}
@@ -404,7 +455,10 @@ export default function AccountPage({ user, profile, profileLoading }) {
               </div>
 
               <div>
-                <label className="mb-2 block text-sm text-zinc-300">Повторите новый пароль</label>
+                <label className="mb-2 block text-sm text-zinc-300">
+                  Повторите новый пароль
+                </label>
+
                 <input
                   type="password"
                   value={repeatPassword}
