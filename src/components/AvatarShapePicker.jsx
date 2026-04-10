@@ -11,7 +11,7 @@ function ShapePreview({ shape, active }) {
     <div
       className={`flex h-20 w-20 items-center justify-center bg-fuchsia-500/20 p-[3px] transition sm:h-24 sm:w-24 ${
         classes.optionOuter
-      } ${active ? 'scale-[1.03] shadow-[0_0_30px_rgba(168,85,247,0.35)]' : ''}`}
+      } ${active ? 'shadow-[0_0_30px_rgba(168,85,247,0.35)]' : ''}`}
     >
       <div
         className={`flex h-full w-full items-center justify-center bg-[#090912] text-xl font-black text-white sm:text-2xl ${
@@ -47,14 +47,16 @@ export default function AvatarShapePicker({
               type="button"
               disabled={loading}
               onClick={() => onChange(option.value)}
-              className={`flex items-center justify-center rounded-[24px] border p-4 transition sm:p-5 ${
+              className={`aspect-square rounded-[24px] border transition ${
                 active
                   ? 'border-fuchsia-400/50 bg-fuchsia-700/15'
                   : 'border-fuchsia-500/15 bg-white/[0.02] hover:border-fuchsia-400/35 hover:bg-fuchsia-900/10'
               } ${loading ? 'opacity-60' : ''}`}
               aria-label={`Выбрать форму аватара: ${option.value}`}
             >
-              <ShapePreview shape={option.value} active={active} />
+              <div className="flex h-full w-full items-center justify-center p-4 sm:p-5">
+                <ShapePreview shape={option.value} active={active} />
+              </div>
             </button>
           )
         })}
