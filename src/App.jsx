@@ -8,6 +8,7 @@ import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import AccountPage from './pages/AccountPage'
 import RequestsPage from './pages/RequestsPage'
+import RulesPage from './pages/RulesPage'
 import { supabase } from './lib/supabase'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
@@ -189,6 +190,8 @@ export default function App() {
 
       <Routes>
         <Route path="/" element={<HomePage user={user} profile={profile} />} />
+
+        <Route path="/rules" element={<RulesPage />} />
 
         <Route
           path="/login"

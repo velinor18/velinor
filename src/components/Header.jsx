@@ -105,9 +105,9 @@ export default function Header({ user, profile, authLoading }) {
               Мои покупки
             </button>
 
-            <button onClick={() => goToHomeSection('how-to-buy')} className={plainButtonClass}>
-              Как купить
-            </button>
+            <NavLink to="/rules" className={linkClass}>
+              Правила
+            </NavLink>
 
             <button onClick={() => goToHomeSection('support')} className={plainButtonClass}>
               Поддержка
@@ -191,12 +191,13 @@ export default function Header({ user, profile, authLoading }) {
                 Мои покупки
               </button>
 
-              <button
-                onClick={() => goToHomeSection('how-to-buy')}
-                className={mobileButtonClass}
+              <NavLink
+                to="/rules"
+                onClick={closeMobileMenu}
+                className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
               >
-                Как купить
-              </button>
+                Правила
+              </NavLink>
 
               <button
                 onClick={() => goToHomeSection('support')}
