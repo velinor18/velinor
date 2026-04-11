@@ -1,16 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
-import {
-  inspectReceiptImage,
-  MAX_RECEIPT_SIZE,
-  revokeReceiptPreviewUrl,
-} from '../lib/receipt'
 
 const WIDGET_STORAGE_KEY = 'velinor_widget_hidden_until'
 const WIDGET_HIDE_HOURS = 12
 const CARD_NUMBER = '2202 2088 0146 2053'
+const MAX_SCREENSHOT_SIZE = 6 * 1024 * 1024
 
 const plans = [
   {
@@ -232,8 +228,6 @@ function getStatusLabel(status) {
 
 export default function HomePage({ user, profile }) {
   const navigate = useNavigate()
-  const receiptInputRef = useRef(null)
-  const receiptPreviewUrlRef = useRef('')
 
   const [isWidgetVisible, setIsWidgetVisible] = useState(false)
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false)
@@ -244,10 +238,6 @@ export default function HomePage({ user, profile }) {
   const [selectedCrypto, setSelectedCrypto] = useState('BTC')
   const [selectedWallet, setSelectedWallet] = useState('Bybit')
   const [uploadedFile, setUploadedFile] = useState(null)
-  const [receiptStatus, setReceiptStatus] = useState('idle')
-  const [receiptError, setReceiptError] = useState('')
-  const [receiptMeta, setReceiptMeta] = useState(null)
-  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState('')
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -255,88 +245,10 @@ export default function HomePage({ user, profile }) {
   const [previewItem, setPreviewItem] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [toast, setToast] = useState('')
-
-  const maxReceiptMb = Math.floor(MAX_RECEIPT_SIZE / (1024 * 1024))
-  const isAdmin = profile?.role === 'admin'
-
-  const isBlocked = useMemo(() => {
-    if (!profile || isAdmin) return false
-    if (!profile.is_blocked) return false
-    if (!profile.blocked_until) return true
-    return new Date(profile.blocked_until).getTime() > Date.now()
-  }, [profile, isAdmin])
-
-  const blockedUntilText = profile?.blocked_until
-    ? new Date(profile.blocked_until).toLocaleString('ru-RU')
-    : '—'
-
-  const blockMessage = useMemo(() => {
-    if (!isBlocked) return ''
-    return `Ваш аккаунт временно заблокирован. Новые заявки недоступны до ${blockedUntilText}.`
-  }, [isBlocked, blockedUntilText])
-
-  const replaceReceiptPreviewUrl = (nextUrl) => {
-    setReceiptPreviewUrl((prevUrl) => {
-      if (prevUrl && prevUrl !== nextUrl) {
-        revokeReceiptPreviewUrl(prevUrl)
-      }
-
-      receiptPreviewUrlRef.current = nextUrl || ''
-      return nextUrl || ''
-    })
-  }
-
-  const resetReceiptSelection = () => {
-    setUploadedFile(null)
-    setReceiptStatus('idle')
-    setReceiptError('')
-    setReceiptMeta(null)
-    replaceReceiptPreviewUrl('')
-  }
-
-  useEffect(() => {
-    if (isBlocked) {
-      resetReceiptSelection()
-    }
-  }, [isBlocked])
-
-  const runReceiptCheck = async (file) => {
-    if (!file) return
-
-    if (isBlocked) {
-      setToast(blockMessage)
-      return
-    }
-
-    setReceiptStatus('checking')
-    setReceiptError('')
-    setReceiptMeta(null)
-    setUploadedFile(null)
-    replaceReceiptPreviewUrl('')
-
-    const result = await inspectReceiptImage(file)
-
-    if (!result.ok) {
-      setReceiptStatus('error')
-      setReceiptError(result.error)
-      return
-    }
-
-    setUploadedFile(file)
-    replaceReceiptPreviewUrl(result.previewUrl)
-    setReceiptMeta({
-      width: result.width,
-      height: result.height,
-      sizeLabel: `${Math.max(1, Math.round(file.size / 1024))} КБ`,
-    })
-    setReceiptStatus('ready')
-  }
-
-  useEffect(() => {
-    return () => {
-      revokeReceiptPreviewUrl(receiptPreviewUrlRef.current)
-    }
-  }, [])
+  const [siteStats, setSiteStats] = useState({
+    clientsCount: 0,
+    successRate: 0,
+  })
 
   useEffect(() => {
     const hiddenUntil = Number(localStorage.getItem(WIDGET_STORAGE_KEY) || 0)
@@ -349,37 +261,47 @@ export default function HomePage({ user, profile }) {
     return () => clearTimeout(timer)
   }, [toast])
 
+  async function loadPublicStats() {
+    if (!supabase) {
+      setSiteStats({
+        clientsCount: 0,
+        successRate: 0,
+      })
+      return
+    }
+
+    const { data, error } = await supabase.rpc('get_public_site_stats')
+
+    if (error) {
+      console.error(error)
+      setSiteStats({
+        clientsCount: 0,
+        successRate: 0,
+      })
+      return
+    }
+
+    const row = Array.isArray(data) ? data[0] : data
+    const totalRequests = Number(row?.total_requests ?? 0)
+    const approvedRequests = Number(row?.approved_requests ?? 0)
+    const uniqueBuyers = Number(row?.unique_buyers ?? 0)
+
+    const successRate =
+      totalRequests > 0 ? Math.round((approvedRequests / totalRequests) * 100) : 0
+
+    setSiteStats({
+      clientsCount: uniqueBuyers,
+      successRate,
+    })
+  }
+
   useEffect(() => {
-    if (!isPurchaseModalOpen || isBlocked) return
-
-    const handlePaste = (event) => {
-      const items = Array.from(event.clipboardData?.items ?? [])
-      const imageItem = items.find((item) => item.type.startsWith('image/'))
-
-      if (!imageItem) {
-        return
-      }
-
-      const file = imageItem.getAsFile()
-
-      if (!file) {
-        return
-      }
-
-      event.preventDefault()
-      runReceiptCheck(file)
-    }
-
-    window.addEventListener('paste', handlePaste)
-
-    return () => {
-      window.removeEventListener('paste', handlePaste)
-    }
-  }, [isPurchaseModalOpen, isBlocked])
+    loadPublicStats()
+  }, [])
 
   const stats = [
-    { value: '250+', label: 'довольных клиентов' },
-    { value: '97%', label: 'успешных заявок' },
+    { value: `${siteStats.clientsCount}+`, label: 'клиентов' },
+    { value: `${siteStats.successRate}%`, label: 'успешных заявок' },
     { value: '24/7', label: 'поддержка' },
   ]
 
@@ -399,56 +321,11 @@ export default function HomePage({ user, profile }) {
     }
   }
 
-  const openReceiptPicker = () => {
-    if (isBlocked) {
-      setToast(blockMessage)
-      return
-    }
-
-    receiptInputRef.current?.click()
-  }
-
-  const closePurchaseModal = () => {
-    setIsPurchaseModalOpen(false)
-    resetReceiptSelection()
-  }
-
   const openPurchaseModal = (plan) => {
     setSelectedPlan(plan)
     setPaymentMethod('card')
-    resetReceiptSelection()
+    setUploadedFile(null)
     setIsPurchaseModalOpen(true)
-  }
-
-  const handlePurchaseAction = (plan) => {
-    setSelectedPlan(plan)
-    setPaymentMethod('card')
-    resetReceiptSelection()
-    setIsPurchaseModalOpen(true)
-  }
-
-  const handleReceiptInputChange = async (e) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-
-    if (!file) return
-
-    await runReceiptCheck(file)
-  }
-
-  const handleReceiptDrop = async (event) => {
-    event.preventDefault()
-
-    if (isBlocked) {
-      setToast(blockMessage)
-      return
-    }
-
-    const file = event.dataTransfer?.files?.[0]
-
-    if (!file) return
-
-    await runReceiptCheck(file)
   }
 
   const loadOrders = async () => {
@@ -462,7 +339,7 @@ export default function HomePage({ user, profile }) {
     const { data, error } = await supabase
       .from('payment_requests')
       .select(
-        'id, username, plan_id, plan_name, price_label, image_path, status, created_at, promo_code'
+        'id, user_id, username, plan_id, plan_name, price_label, image_path, status, created_at, promo_code, admin_hidden'
       )
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
@@ -503,6 +380,23 @@ export default function HomePage({ user, profile }) {
     }
   }, [user])
 
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      setToast('Можно загружать только изображения')
+      return
+    }
+
+    if (file.size > MAX_SCREENSHOT_SIZE) {
+      setToast('Скриншот должен быть не больше 6 МБ')
+      return
+    }
+
+    setUploadedFile(file)
+  }
+
   const openOrderPreview = async (item) => {
     setPreviewLoading(true)
     setPreviewItem({
@@ -534,18 +428,8 @@ export default function HomePage({ user, profile }) {
       return
     }
 
-    if (isBlocked) {
-      setToast(blockMessage)
-      return
-    }
-
-    if (receiptStatus === 'checking') {
-      setToast('Дождитесь завершения проверки изображения')
-      return
-    }
-
-    if (receiptStatus !== 'ready' || !uploadedFile) {
-      setToast('Сначала загрузите и проверьте скриншот оплаты')
+    if (!uploadedFile) {
+      setToast('Сначала загрузите скриншот оплаты')
       return
     }
 
@@ -580,24 +464,20 @@ export default function HomePage({ user, profile }) {
       plan_name: selectedPlan.title,
       price_label: selectedPlan.priceLabel,
       image_path: filePath,
+      admin_hidden: false,
     })
 
     if (insertError) {
       console.error(insertError)
-      setSubmitting(false)
-
-      if (insertError.message === 'ACCOUNT_BLOCKED') {
-        setToast(blockMessage)
-        return
-      }
-
       setToast('Не удалось сохранить заявку')
+      setSubmitting(false)
       return
     }
 
     await loadOrders()
+    await loadPublicStats()
     setSubmitting(false)
-    resetReceiptSelection()
+    setUploadedFile(null)
     setIsPurchaseModalOpen(false)
     setIsOrdersModalOpen(true)
     setOrdersTab('active')
@@ -605,11 +485,6 @@ export default function HomePage({ user, profile }) {
   }
 
   const submitCryptoAttempt = () => {
-    if (isBlocked) {
-      setToast(blockMessage)
-      return
-    }
-
     setIsCryptoModalOpen(false)
     setToast('Криптооплата пока недоступна в этой версии')
   }
@@ -626,29 +501,17 @@ export default function HomePage({ user, profile }) {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="pointer-events-none fixed inset-0">
+      <div className="fixed inset-0 pointer-events-none">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(147,51,234,0.18),transparent_35%),radial-gradient(circle_at_bottom,rgba(168,85,247,0.12),transparent_30%)]" />
         <div className="absolute inset-0 opacity-[0.06] [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:42px_42px]" />
       </div>
 
       <main className="relative z-10 mx-auto max-w-7xl px-4 pb-24 sm:px-6 lg:px-8">
-        {user && isBlocked ? (
-          <div className="mt-8 rounded-[28px] border border-red-500/20 bg-red-500/10 p-5 text-sm leading-7 text-red-100 sm:mt-10 sm:text-base">
-            Ваш аккаунт временно заблокирован. Отправка новых заявок сейчас недоступна.
-            <br />
-            Срок блокировки до: <span className="font-bold">{blockedUntilText}</span>
-          </div>
-        ) : null}
-
         <section
           id="hero"
           className="scroll-mt-28 flex min-h-[72vh] items-center justify-center py-20 sm:py-28"
         >
           <div className="max-w-4xl text-center">
-            <div className="mb-8 inline-flex rounded-full border border-fuchsia-400/30 bg-fuchsia-500/15 px-6 py-3 text-base font-semibold text-fuchsia-200 shadow-[0_0_35px_rgba(168,85,247,0.22)] sm:text-lg">
-              Современный неоновый интерфейс
-            </div>
-
             <h1 className="text-5xl font-black leading-tight text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.18)] sm:text-7xl">
               Добро пожаловать в{' '}
               <span className="bg-gradient-to-r from-violet-300 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent">
@@ -657,8 +520,7 @@ export default function HomePage({ user, profile }) {
             </h1>
 
             <p className="mx-auto mt-8 max-w-3xl text-xl leading-9 text-zinc-300 sm:text-2xl">
-              Теперь эта страница умеет не только показывать тарифы, но и отправлять
-              реальные заявки со скриншотами в Supabase.
+              Выберите тариф, оплатите удобным способом и отправьте заявку на проверку.
             </p>
 
             <div className="mt-10 flex items-center justify-center">
@@ -719,8 +581,8 @@ export default function HomePage({ user, profile }) {
                     </div>
                     <div className="mt-2 text-lg text-zinc-500">навсегда</div>
 
-                    <GlowButton className="mt-10 w-full" onClick={() => handlePurchaseAction(plan)}>
-                      {isBlocked ? 'Проверить статус' : 'Купить подписку'}
+                    <GlowButton className="mt-10 w-full" onClick={() => openPurchaseModal(plan)}>
+                      Купить подписку
                     </GlowButton>
                   </div>
                 </div>
@@ -831,23 +693,37 @@ export default function HomePage({ user, profile }) {
         </footer>
       </main>
 
+      {isWidgetVisible ? (
+        <div className="fixed bottom-4 right-4 z-30 hidden w-[260px] rounded-3xl border border-cyan-400/20 bg-cyan-900/90 p-4 text-white shadow-[0_0_45px_rgba(34,211,238,0.18)] backdrop-blur-xl lg:block">
+          <button
+            onClick={closeWidget}
+            className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-sm text-white transition hover:bg-white/20"
+          >
+            ✕
+          </button>
+
+          <div className="flex items-start gap-3 pr-7">
+            <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-sm">
+              ✈
+            </div>
+
+            <div>
+              <div className="text-base font-bold">Акции и новости</div>
+              <p className="mt-1 text-sm font-semibold text-cyan-50">@VelynoriusBot</p>
+              <p className="mt-2 text-xs leading-5 text-cyan-100/80">
+                Подписывайтесь, чтобы видеть обновления, бонусы и новые предложения.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <ModalShell
         open={isPurchaseModalOpen}
         title={`Оплата: ${selectedPlan.title}`}
-        onClose={closePurchaseModal}
+        onClose={() => setIsPurchaseModalOpen(false)}
       >
         <div className="space-y-6">
-          {isBlocked ? (
-            <div className="rounded-[22px] border border-red-500/20 bg-red-500/10 p-5 text-red-100">
-              <div className="text-xl font-black">Покупка временно недоступна</div>
-              <div className="mt-3 text-sm leading-7 text-red-100/90">
-                Ваш аккаунт заблокирован, поэтому новые заявки сейчас отправлять нельзя.
-                <br />
-                Срок блокировки до: <span className="font-bold">{blockedUntilText}</span>
-              </div>
-            </div>
-          ) : null}
-
           {!user ? (
             <div className="rounded-[22px] border border-yellow-600/30 bg-yellow-500/10 p-4 text-yellow-100/90">
               Чтобы отправить заявку на проверку, сначала войдите в аккаунт.
@@ -877,33 +753,26 @@ export default function HomePage({ user, profile }) {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <button
-                onClick={() => !isBlocked && setPaymentMethod('card')}
-                disabled={isBlocked}
+                onClick={() => setPaymentMethod('card')}
                 className={`rounded-2xl border px-4 py-4 text-lg transition ${
                   paymentMethod === 'card'
                     ? 'border-fuchsia-500 bg-fuchsia-700/10 text-fuchsia-300'
                     : 'border-yellow-200/40 bg-white/5 text-zinc-300'
-                } disabled:opacity-50`}
+                }`}
               >
                 Банковская карта
               </button>
 
               <button
                 onClick={() => {
-                  if (isBlocked) {
-                    setToast(blockMessage)
-                    return
-                  }
-
                   setPaymentMethod('crypto')
                   setIsCryptoModalOpen(true)
                 }}
-                disabled={isBlocked}
                 className={`rounded-2xl border px-4 py-4 text-lg transition ${
                   paymentMethod === 'crypto'
                     ? 'border-fuchsia-500 bg-fuchsia-700/10 text-fuchsia-300'
                     : 'border-yellow-200/40 bg-white/5 text-zinc-300'
-                } disabled:opacity-50`}
+                }`}
               >
                 Криптовалюта
               </button>
@@ -937,135 +806,35 @@ export default function HomePage({ user, profile }) {
             </div>
           </div>
 
-          <div className="rounded-[24px] border border-fuchsia-500/20 bg-white/[0.02] p-5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <div className="text-2xl font-black">Скриншот оплаты</div>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                  Можно выбрать файл, перетащить изображение, вставить через Ctrl+V
-                  на компьютере или выбрать фото с телефона. Перед отправкой скриншот
-                  проходит первичную автоматическую проверку.
-                </p>
+          <div>
+            <div className="mb-4 text-2xl font-black">Загрузите скриншот оплаты</div>
+
+            <label className="flex min-h-[200px] cursor-pointer flex-col items-center justify-center rounded-[24px] border-2 border-dashed border-fuchsia-600/50 bg-fuchsia-900/10 p-6 text-center transition hover:bg-fuchsia-900/15">
+              <div className="text-5xl text-fuchsia-500">⇧</div>
+              <div className="mt-5 max-w-md text-2xl text-zinc-300">
+                Перетащите сюда скриншот или нажмите для выбора
               </div>
+              <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+            </label>
 
-              <button
-                type="button"
-                onClick={openReceiptPicker}
-                disabled={isBlocked}
-                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-50"
-              >
-                Выбрать файл
-              </button>
-            </div>
-
-            <input
-              ref={receiptInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={handleReceiptInputChange}
-            />
-
-            <div
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={handleReceiptDrop}
-              className="mt-5 rounded-[24px] border-2 border-dashed border-fuchsia-600/45 bg-fuchsia-900/10 p-4 transition hover:bg-fuchsia-900/15 sm:p-6"
-            >
-              {receiptPreviewUrl ? (
-                <div className="space-y-4">
-                  <div className="overflow-hidden rounded-[20px] border border-fuchsia-500/15 bg-black">
-                    <img
-                      src={receiptPreviewUrl}
-                      alt="Предпросмотр скриншота оплаты"
-                      className="max-h-[380px] w-full object-contain"
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={openReceiptPicker}
-                      disabled={isBlocked}
-                      className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-50"
-                    >
-                      Заменить
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={resetReceiptSelection}
-                      className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
-                    >
-                      Очистить
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <label className="flex min-h-[220px] cursor-pointer flex-col items-center justify-center text-center">
-                  <div className="text-5xl text-fuchsia-500">⇧</div>
-                  <div className="mt-5 max-w-md text-2xl text-zinc-300">
-                    Нажмите, чтобы выбрать скриншот, или перетащите его сюда
-                  </div>
-                  <div className="mt-3 text-sm leading-6 text-zinc-400">
-                    На компьютере также работает Ctrl+V. Максимальный размер файла {maxReceiptMb} МБ.
-                  </div>
-                  <button
-                    type="button"
-                    onClick={openReceiptPicker}
-                    disabled={isBlocked}
-                    className="mt-6 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-50"
-                  >
-                    Выбрать изображение
-                  </button>
-                </label>
-              )}
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {receiptStatus === 'checking' ? (
-                <div className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-500/10 px-4 py-3 text-sm text-fuchsia-200">
-                  Проверяем изображение перед отправкой...
-                </div>
-              ) : null}
-
-              {receiptStatus === 'error' ? (
-                <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                  {receiptError}
-                </div>
-              ) : null}
-
-              {receiptStatus === 'ready' && uploadedFile && receiptMeta ? (
-                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-                  Первичная проверка пройдена. Размер: {receiptMeta.sizeLabel}. Разрешение:{' '}
-                  {receiptMeta.width}×{receiptMeta.height}. Теперь изображение можно отправить админу на ручную проверку.
-                </div>
-              ) : null}
-
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-5 text-zinc-400">
-                Пока идёт проверка изображения, кнопка отправки неактивна. Эта
-                проверка не подтверждает оплату автоматически, а только отсеивает
-                неподходящие файлы до ручной модерации администратором.
+            {uploadedFile ? (
+              <div className="mt-4 rounded-2xl border border-fuchsia-500/20 bg-white/[0.02] px-4 py-3 text-zinc-300">
+                Выбран файл: <span className="text-fuchsia-400">{uploadedFile.name}</span> ·{' '}
+                {Math.max(1, Math.round(uploadedFile.size / 1024))} КБ
               </div>
-            </div>
+            ) : null}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <button
-              onClick={closePurchaseModal}
+              onClick={() => setIsPurchaseModalOpen(false)}
               className="rounded-2xl border border-white/10 px-6 py-4 text-lg font-extrabold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
             >
               Отмена
             </button>
 
-            <GlowButton
-              disabled={submitting || receiptStatus !== 'ready' || isBlocked}
-              onClick={submitCardPurchase}
-            >
-              {isBlocked
-                ? 'Недоступно'
-                : submitting
-                  ? 'Отправляем...'
-                  : 'Отправить на проверку'}
+            <GlowButton disabled={submitting} onClick={submitCardPurchase}>
+              {submitting ? 'Отправляем...' : 'Отправить на проверку'}
             </GlowButton>
           </div>
         </div>
@@ -1278,17 +1047,6 @@ export default function HomePage({ user, profile }) {
         onClose={() => setIsCryptoModalOpen(false)}
       >
         <div className="space-y-6">
-          {isBlocked ? (
-            <div className="rounded-[22px] border border-red-500/20 bg-red-500/10 p-5 text-red-100">
-              <div className="text-xl font-black">Функция недоступна</div>
-              <div className="mt-3 text-sm leading-7 text-red-100/90">
-                Ваш аккаунт заблокирован.
-                <br />
-                Срок блокировки до: <span className="font-bold">{blockedUntilText}</span>
-              </div>
-            </div>
-          ) : null}
-
           <div className="rounded-[22px] border border-yellow-600/30 bg-yellow-500/10 p-4 text-yellow-100/90">
             Этот раздел показан как демонстрация интерфейса. В текущей версии криптооплата
             не работает.
@@ -1300,13 +1058,12 @@ export default function HomePage({ user, profile }) {
               {cryptoOptions.map((item) => (
                 <button
                   key={item.symbol}
-                  onClick={() => !isBlocked && setSelectedCrypto(item.symbol)}
-                  disabled={isBlocked}
+                  onClick={() => setSelectedCrypto(item.symbol)}
                   className={`rounded-2xl border px-4 py-4 text-left transition ${
                     selectedCrypto === item.symbol
                       ? 'border-fuchsia-500 bg-fuchsia-700/10'
                       : 'border-white/10 bg-white/[0.02]'
-                  } disabled:opacity-50`}
+                  }`}
                 >
                   <div className="text-lg font-black">{item.symbol}</div>
                   <div className="mt-1 text-sm text-zinc-400">Сеть: {item.network}</div>
@@ -1321,13 +1078,12 @@ export default function HomePage({ user, profile }) {
               {walletOptions.map((wallet) => (
                 <button
                   key={wallet}
-                  onClick={() => !isBlocked && setSelectedWallet(wallet)}
-                  disabled={isBlocked}
+                  onClick={() => setSelectedWallet(wallet)}
                   className={`rounded-2xl border px-4 py-4 text-left transition ${
                     selectedWallet === wallet
                       ? 'border-fuchsia-500 bg-fuchsia-700/10'
                       : 'border-white/10 bg-white/[0.02]'
-                  } disabled:opacity-50`}
+                  }`}
                 >
                   <div className="text-lg font-bold">{wallet}</div>
                 </button>
@@ -1346,8 +1102,8 @@ export default function HomePage({ user, profile }) {
             </div>
           </div>
 
-          <GlowButton className="w-full" onClick={submitCryptoAttempt} disabled={isBlocked}>
-            {isBlocked ? 'Недоступно' : 'Уже оплатил'}
+          <GlowButton className="w-full" onClick={submitCryptoAttempt}>
+            Уже оплатил
           </GlowButton>
         </div>
       </ModalShell>
