@@ -39,6 +39,25 @@ function formatMessageTime(value) {
   }
 }
 
+function isRestrictionActive(isBlocked, blockedUntil) {
+  if (!isBlocked) return false
+  if (!blockedUntil) return true
+
+  const dateValue = new Date(blockedUntil).getTime()
+  if (Number.isNaN(dateValue)) return true
+
+  return dateValue > Date.now()
+}
+
+function formatRestrictionUntil(blockedUntil) {
+  if (!blockedUntil) return 'срок не указан'
+
+  const dateValue = new Date(blockedUntil)
+  if (Number.isNaN(dateValue.getTime())) return 'срок не указан'
+
+  return dateValue.toLocaleString('ru-RU')
+}
+
 function MessageAvatar({ username, avatarUrl, avatarShape }) {
   const shapeClass = getAvatarShapeClass(avatarShape)
 
@@ -106,7 +125,7 @@ function ChatMessageItem({ item, isOwn, profileInfo, avatarUrl }) {
   )
 }
 
-export default function ChatPage({ user }) {
+export default function ChatPage({ user, profile }) {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -116,10 +135,21 @@ export default function ChatPage({ user }) {
   const [errorText, setErrorText] = useState('')
   const [profileDirectory, setProfileDirectory] = useState({})
   const [avatarUrlDirectory, setAvatarUrlDirectory] = useState({})
+  const [chatRestriction, setChatRestriction] = useState({
+    isBlocked: false,
+    blockedUntil: null,
+  })
 
   const bottomRef = useRef(null)
   const chatViewportRef = useRef(null)
   const avatarUrlDirectoryRef = useRef({})
+
+  useEffect(() => {
+    setChatRestriction({
+      isBlocked: Boolean(profile?.chat_is_blocked),
+      blockedUntil: profile?.chat_blocked_until ?? null,
+    })
+  }, [profile?.chat_is_blocked, profile?.chat_blocked_until])
 
   useEffect(() => {
     avatarUrlDirectoryRef.current = avatarUrlDirectory
@@ -135,6 +165,11 @@ export default function ChatPage({ user }) {
       })
     }
   }, [])
+
+  const chatBlocked = isRestrictionActive(
+    chatRestriction.isBlocked,
+    chatRestriction.blockedUntil
+  )
 
   async function loadProfilesForUserIds(userIds) {
     if (!supabase || !userIds?.length) return
@@ -354,6 +389,15 @@ export default function ChatPage({ user }) {
       return
     }
 
+    if (chatBlocked) {
+      setErrorText(
+        `Вы не можете отправлять сообщения до ${formatRestrictionUntil(
+          chatRestriction.blockedUntil
+        )}.`
+      )
+      return
+    }
+
     const trimmed = messageText.trim()
 
     if (!trimmed) {
@@ -381,6 +425,13 @@ export default function ChatPage({ user }) {
     }
 
     if (!data?.ok) {
+      if (data?.chat_is_blocked || data?.chat_blocked_until) {
+        setChatRestriction({
+          isBlocked: Boolean(data?.chat_is_blocked),
+          blockedUntil: data?.chat_blocked_until ?? null,
+        })
+      }
+
       setErrorText(data?.message || 'Сообщение отклонено')
       return
     }
@@ -461,6 +512,14 @@ export default function ChatPage({ user }) {
           )}
         </div>
 
+        {chatBlocked ? (
+          <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm leading-6 text-red-200">
+            Вы не можете отправлять сообщения, пока чат временно заблокирован.
+            <br />
+            Срок блокировки до: {formatRestrictionUntil(chatRestriction.blockedUntil)}
+          </div>
+        ) : null}
+
         <form className="mt-6" onSubmit={handleSubmit}>
           <div className="rounded-[28px] border border-fuchsia-500/10 bg-black/30 p-4">
             <textarea
@@ -474,8 +533,9 @@ export default function ChatPage({ user }) {
               }}
               rows={4}
               maxLength={1200}
+              disabled={chatBlocked}
               placeholder="Напишите сообщение..."
-              className="w-full resize-none rounded-2xl border border-fuchsia-500/15 bg-black/40 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/40"
+              className="w-full resize-none rounded-2xl border border-fuchsia-500/15 bg-black/40 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/40 disabled:cursor-not-allowed disabled:opacity-60"
             />
 
             <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -490,7 +550,7 @@ export default function ChatPage({ user }) {
 
                 <button
                   type="submit"
-                  disabled={sending}
+                  disabled={sending || chatBlocked}
                   className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
                 >
                   {sending ? 'Отправляем...' : 'Отправить'}

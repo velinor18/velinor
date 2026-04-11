@@ -114,6 +114,25 @@ async function copyText(text, onSuccess, onFail) {
   }
 }
 
+function isRestrictionActive(isBlocked, blockedUntil) {
+  if (!isBlocked) return false
+  if (!blockedUntil) return true
+
+  const dateValue = new Date(blockedUntil).getTime()
+  if (Number.isNaN(dateValue)) return true
+
+  return dateValue > Date.now()
+}
+
+function formatRestrictionUntil(blockedUntil) {
+  if (!blockedUntil) return 'срок не указан'
+
+  const dateValue = new Date(blockedUntil)
+  if (Number.isNaN(dateValue.getTime())) return 'срок не указан'
+
+  return dateValue.toLocaleString('ru-RU')
+}
+
 function GlowButton({ children, className = '', ...props }) {
   return (
     <button
@@ -250,6 +269,15 @@ export default function HomePage({ user, profile }) {
     successRate: 0,
   })
 
+  const paymentBlocked = isRestrictionActive(
+    profile?.payment_is_blocked,
+    profile?.payment_blocked_until
+  )
+
+  const paymentBlockedUntilText = formatRestrictionUntil(
+    profile?.payment_blocked_until
+  )
+
   useEffect(() => {
     const hiddenUntil = Number(localStorage.getItem(WIDGET_STORAGE_KEY) || 0)
     setIsWidgetVisible(Date.now() >= hiddenUntil)
@@ -381,6 +409,11 @@ export default function HomePage({ user, profile }) {
   }, [user])
 
   const handleFileChange = (e) => {
+    if (paymentBlocked) {
+      setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
+      return
+    }
+
     const file = e.target.files?.[0]
     if (!file) return
 
@@ -418,6 +451,11 @@ export default function HomePage({ user, profile }) {
   const submitCardPurchase = async () => {
     if (!supabase) {
       setToast('Supabase не подключён')
+      return
+    }
+
+    if (paymentBlocked) {
+      setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
       return
     }
 
@@ -739,6 +777,14 @@ export default function HomePage({ user, profile }) {
             </div>
           ) : null}
 
+          {paymentBlocked ? (
+            <div className="rounded-[22px] border border-red-500/20 bg-red-500/10 p-4 text-red-200">
+              Отправка новых заявок на оплату временно недоступна.
+              <br />
+              Срок ограничения до: {paymentBlockedUntilText}
+            </div>
+          ) : null}
+
           <div className="rounded-[22px] border border-fuchsia-500/20 bg-fuchsia-950/20 p-5">
             <div className="text-2xl font-black">
               Тариф: <span className="text-fuchsia-400">{selectedPlan.title}</span>
@@ -809,12 +855,24 @@ export default function HomePage({ user, profile }) {
           <div>
             <div className="mb-4 text-2xl font-black">Загрузите скриншот оплаты</div>
 
-            <label className="flex min-h-[200px] cursor-pointer flex-col items-center justify-center rounded-[24px] border-2 border-dashed border-fuchsia-600/50 bg-fuchsia-900/10 p-6 text-center transition hover:bg-fuchsia-900/15">
+            <label
+              className={`flex min-h-[200px] flex-col items-center justify-center rounded-[24px] border-2 border-dashed border-fuchsia-600/50 bg-fuchsia-900/10 p-6 text-center transition ${
+                paymentBlocked
+                  ? 'cursor-not-allowed opacity-60'
+                  : 'cursor-pointer hover:bg-fuchsia-900/15'
+              }`}
+            >
               <div className="text-5xl text-fuchsia-500">⇧</div>
               <div className="mt-5 max-w-md text-2xl text-zinc-300">
                 Перетащите сюда скриншот или нажмите для выбора
               </div>
-              <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={paymentBlocked}
+                onChange={handleFileChange}
+              />
             </label>
 
             {uploadedFile ? (
@@ -833,8 +891,12 @@ export default function HomePage({ user, profile }) {
               Отмена
             </button>
 
-            <GlowButton disabled={submitting} onClick={submitCardPurchase}>
-              {submitting ? 'Отправляем...' : 'Отправить на проверку'}
+            <GlowButton disabled={submitting || paymentBlocked} onClick={submitCardPurchase}>
+              {paymentBlocked
+                ? 'Покупка временно недоступна'
+                : submitting
+                  ? 'Отправляем...'
+                  : 'Отправить на проверку'}
             </GlowButton>
           </div>
         </div>

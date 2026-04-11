@@ -26,6 +26,10 @@ const PROFILE_SELECT_QUERY = `
   strikes_count,
   is_blocked,
   blocked_until,
+  chat_is_blocked,
+  chat_blocked_until,
+  payment_is_blocked,
+  payment_blocked_until,
   telegram_user_id,
   telegram_username,
   telegram_linked_at
