@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { inspectReceiptImage, revokeReceiptPreviewUrl } from '../lib/receipt'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
 
 const WIDGET_STORAGE_KEY = 'velinor_widget_hidden_until'
 const WIDGET_HIDE_HOURS = 12
 const CARD_NUMBER = '2202 2088 0146 2053'
-const MAX_SCREENSHOT_SIZE = 6 * 1024 * 1024
 
 const plans = [
   {
@@ -133,6 +133,16 @@ function formatRestrictionUntil(blockedUntil) {
   return dateValue.toLocaleString('ru-RU')
 }
 
+function formatFileSize(size) {
+  const safeSize = Number(size || 0)
+
+  if (safeSize >= 1024 * 1024) {
+    return `${(safeSize / (1024 * 1024)).toFixed(2)} МБ`
+  }
+
+  return `${Math.max(1, Math.round(safeSize / 1024))} КБ`
+}
+
 function GlowButton({ children, className = '', ...props }) {
   return (
     <button
@@ -256,7 +266,8 @@ export default function HomePage({ user, profile }) {
   const [paymentMethod, setPaymentMethod] = useState('card')
   const [selectedCrypto, setSelectedCrypto] = useState('BTC')
   const [selectedWallet, setSelectedWallet] = useState('Bybit')
-  const [uploadedFile, setUploadedFile] = useState(null)
+  const [uploadedReceipt, setUploadedReceipt] = useState(null)
+  const [isReceiptDragActive, setIsReceiptDragActive] = useState(false)
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -288,6 +299,47 @@ export default function HomePage({ user, profile }) {
     const timer = setTimeout(() => setToast(''), 2600)
     return () => clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    return () => {
+      if (uploadedReceipt?.previewUrl) {
+        revokeReceiptPreviewUrl(uploadedReceipt.previewUrl)
+      }
+    }
+  }, [uploadedReceipt?.previewUrl])
+
+  function clearUploadedReceipt() {
+    setUploadedReceipt(null)
+    setIsReceiptDragActive(false)
+  }
+
+  function closePurchaseModal() {
+    setIsPurchaseModalOpen(false)
+    clearUploadedReceipt()
+  }
+
+  async function handleReceiptSelected(file) {
+    if (paymentBlocked) {
+      setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
+      return
+    }
+
+    const result = await inspectReceiptImage(file)
+
+    if (!result.ok) {
+      setToast(result.error || 'Не удалось обработать изображение')
+      return
+    }
+
+    setUploadedReceipt({
+      file,
+      previewUrl: result.previewUrl,
+      width: result.width,
+      height: result.height,
+    })
+
+    setToast('Скриншот загружен')
+  }
 
   async function loadPublicStats() {
     if (!supabase) {
@@ -352,7 +404,7 @@ export default function HomePage({ user, profile }) {
   const openPurchaseModal = (plan) => {
     setSelectedPlan(plan)
     setPaymentMethod('card')
-    setUploadedFile(null)
+    clearUploadedReceipt()
     setIsPurchaseModalOpen(true)
   }
 
@@ -408,26 +460,12 @@ export default function HomePage({ user, profile }) {
     }
   }, [user])
 
-  const handleFileChange = (e) => {
-    if (paymentBlocked) {
-      setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
-      return
-    }
-
+  const handleFileChange = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    if (!file.type.startsWith('image/')) {
-      setToast('Можно загружать только изображения')
-      return
-    }
-
-    if (file.size > MAX_SCREENSHOT_SIZE) {
-      setToast('Скриншот должен быть не больше 6 МБ')
-      return
-    }
-
-    setUploadedFile(file)
+    await handleReceiptSelected(file)
+    e.target.value = ''
   }
 
   const openOrderPreview = async (item) => {
@@ -466,14 +504,14 @@ export default function HomePage({ user, profile }) {
       return
     }
 
-    if (!uploadedFile) {
+    if (!uploadedReceipt?.file) {
       setToast('Сначала загрузите скриншот оплаты')
       return
     }
 
     setSubmitting(true)
 
-    const safeName = uploadedFile.name
+    const safeName = uploadedReceipt.file.name
       .toLowerCase()
       .replace(/[^a-z0-9._-]/g, '-')
       .replace(/-+/g, '-')
@@ -482,10 +520,10 @@ export default function HomePage({ user, profile }) {
 
     const { error: uploadError } = await supabase.storage
       .from('payment-screenshots')
-      .upload(filePath, uploadedFile, {
+      .upload(filePath, uploadedReceipt.file, {
         cacheControl: '3600',
         upsert: false,
-        contentType: uploadedFile.type || 'image/png',
+        contentType: uploadedReceipt.file.type || 'image/png',
       })
 
     if (uploadError) {
@@ -515,7 +553,7 @@ export default function HomePage({ user, profile }) {
     await loadOrders()
     await loadPublicStats()
     setSubmitting(false)
-    setUploadedFile(null)
+    clearUploadedReceipt()
     setIsPurchaseModalOpen(false)
     setIsOrdersModalOpen(true)
     setOrdersTab('active')
@@ -759,7 +797,7 @@ export default function HomePage({ user, profile }) {
       <ModalShell
         open={isPurchaseModalOpen}
         title={`Оплата: ${selectedPlan.title}`}
-        onClose={() => setIsPurchaseModalOpen(false)}
+        onClose={closePurchaseModal}
       >
         <div className="space-y-6">
           {!user ? (
@@ -767,7 +805,7 @@ export default function HomePage({ user, profile }) {
               Чтобы отправить заявку на проверку, сначала войдите в аккаунт.
               <button
                 onClick={() => {
-                  setIsPurchaseModalOpen(false)
+                  closePurchaseModal()
                   navigate('/login')
                 }}
                 className="mt-4 block rounded-xl border border-yellow-300/20 bg-black/20 px-4 py-2 text-sm font-semibold text-white"
@@ -856,36 +894,97 @@ export default function HomePage({ user, profile }) {
             <div className="mb-4 text-2xl font-black">Загрузите скриншот оплаты</div>
 
             <label
-              className={`flex min-h-[200px] flex-col items-center justify-center rounded-[24px] border-2 border-dashed border-fuchsia-600/50 bg-fuchsia-900/10 p-6 text-center transition ${
+              onDragOver={(event) => {
+                event.preventDefault()
+                if (paymentBlocked) return
+                setIsReceiptDragActive(true)
+              }}
+              onDragLeave={(event) => {
+                event.preventDefault()
+                setIsReceiptDragActive(false)
+              }}
+              onDrop={async (event) => {
+                event.preventDefault()
+                setIsReceiptDragActive(false)
+
+                if (paymentBlocked) {
+                  setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
+                  return
+                }
+
+                const file = event.dataTransfer?.files?.[0]
+                if (!file) return
+
+                await handleReceiptSelected(file)
+              }}
+              className={`flex min-h-[200px] flex-col items-center justify-center rounded-[24px] border-2 border-dashed p-6 text-center transition ${
                 paymentBlocked
-                  ? 'cursor-not-allowed opacity-60'
-                  : 'cursor-pointer hover:bg-fuchsia-900/15'
+                  ? 'cursor-not-allowed border-fuchsia-600/30 bg-fuchsia-900/5 opacity-60'
+                  : isReceiptDragActive
+                    ? 'cursor-pointer border-fuchsia-400 bg-fuchsia-900/20'
+                    : 'cursor-pointer border-fuchsia-600/50 bg-fuchsia-900/10 hover:bg-fuchsia-900/15'
               }`}
             >
               <div className="text-5xl text-fuchsia-500">⇧</div>
               <div className="mt-5 max-w-md text-2xl text-zinc-300">
                 Перетащите сюда скриншот или нажмите для выбора
               </div>
+              <div className="mt-3 text-sm text-zinc-500">
+                После выбора изображение сразу появится ниже
+              </div>
+
               <input
                 type="file"
-                accept="image/*"
+                accept="image/png,image/jpeg,image/webp"
                 className="hidden"
                 disabled={paymentBlocked}
                 onChange={handleFileChange}
               />
             </label>
 
-            {uploadedFile ? (
-              <div className="mt-4 rounded-2xl border border-fuchsia-500/20 bg-white/[0.02] px-4 py-3 text-zinc-300">
-                Выбран файл: <span className="text-fuchsia-400">{uploadedFile.name}</span> ·{' '}
-                {Math.max(1, Math.round(uploadedFile.size / 1024))} КБ
+            {uploadedReceipt ? (
+              <div className="mt-5 rounded-[24px] border border-fuchsia-500/20 bg-white/[0.02] p-4 sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-lg font-black text-white">
+                      Предпросмотр загруженного изображения
+                    </div>
+                    <div className="mt-1 break-all text-sm text-zinc-400">
+                      {uploadedReceipt.file.name}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={clearUploadedReceipt}
+                    className="rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-2 text-sm font-bold uppercase tracking-wide text-white transition hover:bg-red-500/20"
+                  >
+                    Удалить
+                  </button>
+                </div>
+
+                <div className="mt-4 overflow-hidden rounded-[22px] border border-fuchsia-500/15 bg-black">
+                  <img
+                    src={uploadedReceipt.previewUrl}
+                    alt="Предпросмотр скриншота оплаты"
+                    className="max-h-[460px] w-full object-contain bg-black"
+                  />
+                </div>
+
+                <div className="mt-4 flex flex-col gap-2 text-sm text-zinc-400 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+                  <div>Размер файла: {formatFileSize(uploadedReceipt.file.size)}</div>
+                  <div>
+                    Разрешение: {uploadedReceipt.width} × {uploadedReceipt.height}
+                  </div>
+                  <div>Формат: {uploadedReceipt.file.type || 'image/*'}</div>
+                </div>
               </div>
             ) : null}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <button
-              onClick={() => setIsPurchaseModalOpen(false)}
+              onClick={closePurchaseModal}
               className="rounded-2xl border border-white/10 px-6 py-4 text-lg font-extrabold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
             >
               Отмена
