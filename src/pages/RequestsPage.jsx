@@ -1,6 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
+
+const PAYMENT_REJECTION_OPTIONS = [
+  { value: 'wrong_image', label: 'Загружено не то изображение' },
+  { value: 'invalid_receipt', label: 'Недействительная квитанция' },
+  { value: 'fake_receipt', label: 'Поддельная квитанция' },
+  { value: 'unreadable_receipt', label: 'Нечитаемый скриншот' },
+  { value: 'amount_mismatch', label: 'Сумма не совпадает' },
+  { value: 'payment_not_found', label: 'Оплата не подтверждается' },
+  { value: 'duplicate_request', label: 'Дубликат заявки' },
+  { value: 'other', label: 'Другая причина' },
+]
 
 function generatePromoCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -9,6 +20,13 @@ function generatePromoCode() {
     result += alphabet[Math.floor(Math.random() * alphabet.length)]
   }
   return result
+}
+
+function getRejectionReasonLabel(reasonCode) {
+  return (
+    PAYMENT_REJECTION_OPTIONS.find((item) => item.value === reasonCode)?.label ||
+    'Причина не указана'
+  )
 }
 
 function ImagePreviewModal({ item, loading, onClose }) {
@@ -65,6 +83,112 @@ function ImagePreviewModal({ item, loading, onClose }) {
   )
 }
 
+function RejectPaymentModal({
+  open,
+  item,
+  reasonCode,
+  comment,
+  loading,
+  onReasonChange,
+  onCommentChange,
+  onClose,
+  onConfirm,
+}) {
+  if (!open || !item) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl rounded-[28px] border border-fuchsia-500/20 bg-[#0b0b18] shadow-[0_0_80px_rgba(168,85,247,0.18)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-fuchsia-500/15 px-6 py-5">
+          <div>
+            <div className="text-2xl font-black text-white">
+              Отклонение заявки
+            </div>
+            <div className="mt-1 text-sm text-zinc-400">
+              {item.username} · {item.plan_name} · {item.price_label}
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-fuchsia-500/15 bg-white/5 px-3 py-2 text-zinc-300 transition hover:border-fuchsia-400/40 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-6 p-6">
+          <div>
+            <div className="mb-4 text-lg font-black text-white">
+              Выберите причину
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              {PAYMENT_REJECTION_OPTIONS.map((option) => {
+                const isActive = option.value === reasonCode
+
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onReasonChange(option.value)}
+                    className={`rounded-2xl border px-4 py-4 text-left text-sm font-bold transition ${
+                      isActive
+                        ? 'border-red-400/40 bg-red-500/10 text-white'
+                        : 'border-fuchsia-500/15 bg-white/[0.02] text-zinc-300 hover:border-fuchsia-400/30 hover:bg-fuchsia-900/10'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-3 block text-sm font-bold uppercase tracking-wide text-zinc-400">
+              Комментарий администратора
+            </label>
+
+            <textarea
+              value={comment}
+              onChange={(e) => onCommentChange(e.target.value)}
+              rows={5}
+              placeholder="Например: на скриншоте отсутствует подтверждение оплаты"
+              className="w-full resize-none rounded-2xl border border-fuchsia-500/20 bg-black/40 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/40"
+            />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-2xl border border-white/10 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
+            >
+              Отмена
+            </button>
+
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={loading}
+              className="rounded-2xl border border-red-400/20 bg-red-500/10 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
+            >
+              {loading ? 'Отклоняем...' : 'Подтвердить отклонение'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function getStatusLabel(status) {
   if (status === 'approved') return 'Успешно оплачено'
   if (status === 'rejected') return 'Отклонено'
@@ -80,6 +204,11 @@ export default function RequestsPage() {
   const [requestsTab, setRequestsTab] = useState('pending')
   const [clearingArchive, setClearingArchive] = useState(false)
 
+  const [rejectModalOpen, setRejectModalOpen] = useState(false)
+  const [rejectTarget, setRejectTarget] = useState(null)
+  const [rejectReasonCode, setRejectReasonCode] = useState('wrong_image')
+  const [rejectComment, setRejectComment] = useState('')
+
   const loadRequests = async () => {
     if (!supabase) {
       setLoading(false)
@@ -91,7 +220,7 @@ export default function RequestsPage() {
     const { data, error } = await supabase
       .from('payment_requests')
       .select(
-        'id, user_id, username, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden'
+        'id, user_id, username, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden, rejection_reason_code, admin_comment'
       )
       .eq('admin_hidden', false)
       .order('created_at', { ascending: false })
@@ -111,9 +240,17 @@ export default function RequestsPage() {
     loadRequests()
   }, [])
 
-  const pendingRequests = requests.filter((item) => item.status === 'pending')
-  const archivedRequests = requests.filter(
-    (item) => item.status === 'approved' || item.status === 'rejected'
+  const pendingRequests = useMemo(
+    () => requests.filter((item) => item.status === 'pending'),
+    [requests]
+  )
+
+  const archivedRequests = useMemo(
+    () =>
+      requests.filter(
+        (item) => item.status === 'approved' || item.status === 'rejected'
+      ),
+    [requests]
   )
 
   const openPreview = async (item) => {
@@ -132,6 +269,21 @@ export default function RequestsPage() {
     setPreviewLoading(false)
   }
 
+  const openRejectModal = (item) => {
+    setRejectTarget(item)
+    setRejectReasonCode(item.rejection_reason_code || 'wrong_image')
+    setRejectComment(item.admin_comment || '')
+    setRejectModalOpen(true)
+  }
+
+  const closeRejectModal = () => {
+    if (processingId) return
+    setRejectModalOpen(false)
+    setRejectTarget(null)
+    setRejectReasonCode('wrong_image')
+    setRejectComment('')
+  }
+
   const approvePayment = async (item) => {
     if (!supabase) return
 
@@ -145,6 +297,8 @@ export default function RequestsPage() {
         status: 'approved',
         promo_code: code,
         reviewed_at: reviewedAt,
+        rejection_reason_code: null,
+        admin_comment: null,
         admin_hidden: false,
       })
       .eq('id', item.id)
@@ -163,6 +317,8 @@ export default function RequestsPage() {
               status: 'approved',
               promo_code: code,
               reviewed_at: reviewedAt,
+              rejection_reason_code: null,
+              admin_comment: null,
               admin_hidden: false,
             }
           : request
@@ -172,11 +328,11 @@ export default function RequestsPage() {
     setProcessingId(null)
   }
 
-  const rejectPayment = async (item) => {
-    if (!supabase) return
+  const confirmRejectPayment = async () => {
+    if (!supabase || !rejectTarget) return
 
     const reviewedAt = new Date().toISOString()
-    setProcessingId(item.id)
+    setProcessingId(rejectTarget.id)
 
     const { error } = await supabase
       .from('payment_requests')
@@ -184,9 +340,11 @@ export default function RequestsPage() {
         status: 'rejected',
         promo_code: null,
         reviewed_at: reviewedAt,
+        rejection_reason_code: rejectReasonCode,
+        admin_comment: rejectComment.trim() || null,
         admin_hidden: false,
       })
-      .eq('id', item.id)
+      .eq('id', rejectTarget.id)
 
     if (error) {
       console.error(error)
@@ -196,12 +354,14 @@ export default function RequestsPage() {
 
     setRequests((prev) =>
       prev.map((request) =>
-        request.id === item.id
+        request.id === rejectTarget.id
           ? {
               ...request,
               status: 'rejected',
               promo_code: null,
               reviewed_at: reviewedAt,
+              rejection_reason_code: rejectReasonCode,
+              admin_comment: rejectComment.trim() || null,
               admin_hidden: false,
             }
           : request
@@ -209,6 +369,7 @@ export default function RequestsPage() {
     )
 
     setProcessingId(null)
+    closeRejectModal()
   }
 
   const restoreToPending = async (item) => {
@@ -222,6 +383,8 @@ export default function RequestsPage() {
         status: 'pending',
         promo_code: null,
         reviewed_at: null,
+        rejection_reason_code: null,
+        admin_comment: null,
         admin_hidden: false,
       })
       .eq('id', item.id)
@@ -240,6 +403,8 @@ export default function RequestsPage() {
               status: 'pending',
               promo_code: null,
               reviewed_at: null,
+              rejection_reason_code: null,
+              admin_comment: null,
               admin_hidden: false,
             }
           : request
@@ -430,11 +595,11 @@ export default function RequestsPage() {
                       </button>
 
                       <button
-                        onClick={() => rejectPayment(item)}
+                        onClick={() => openRejectModal(item)}
                         disabled={processingId === item.id}
                         className="rounded-2xl border border-red-400/20 bg-red-500/10 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
                       >
-                        {processingId === item.id ? 'Отклоняем...' : 'Отклонить заявку'}
+                        Отклонить заявку
                       </button>
 
                       <button
@@ -482,13 +647,35 @@ export default function RequestsPage() {
                     {new Date(item.reviewed_at || item.created_at).toLocaleString('ru-RU')}
                   </div>
 
-                  {item.promo_code ? (
+                  {item.status === 'approved' && item.promo_code ? (
                     <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4">
                       <div className="text-sm uppercase tracking-wide text-emerald-200">
                         Выданный промокод
                       </div>
                       <div className="mt-2 text-xl font-black text-white">
                         {item.promo_code}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {item.status === 'rejected' ? (
+                    <div className="mt-4 space-y-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-4">
+                      <div>
+                        <div className="text-sm uppercase tracking-wide text-red-200">
+                          Причина отклонения
+                        </div>
+                        <div className="mt-2 text-lg font-black text-white">
+                          {getRejectionReasonLabel(item.rejection_reason_code)}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-sm uppercase tracking-wide text-red-200">
+                          Комментарий администратора
+                        </div>
+                        <div className="mt-2 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
+                          {item.admin_comment || 'Комментарий отсутствует'}
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -538,6 +725,18 @@ export default function RequestsPage() {
           setSelectedRequest(null)
           setPreviewLoading(false)
         }}
+      />
+
+      <RejectPaymentModal
+        open={rejectModalOpen}
+        item={rejectTarget}
+        reasonCode={rejectReasonCode}
+        comment={rejectComment}
+        loading={Boolean(processingId)}
+        onReasonChange={setRejectReasonCode}
+        onCommentChange={setRejectComment}
+        onClose={closeRejectModal}
+        onConfirm={confirmRejectPayment}
       />
     </div>
   )
