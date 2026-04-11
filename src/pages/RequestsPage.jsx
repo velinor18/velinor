@@ -91,7 +91,7 @@ export default function RequestsPage() {
     const { data, error } = await supabase
       .from('payment_requests')
       .select(
-        'id, username, plan_name, price_label, image_path, status, created_at, promo_code, admin_hidden'
+        'id, user_id, username, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden'
       )
       .eq('admin_hidden', false)
       .order('created_at', { ascending: false })
@@ -136,6 +136,7 @@ export default function RequestsPage() {
     if (!supabase) return
 
     const code = item.promo_code || generatePromoCode()
+    const reviewedAt = new Date().toISOString()
     setProcessingId(item.id)
 
     const { error } = await supabase
@@ -143,6 +144,7 @@ export default function RequestsPage() {
       .update({
         status: 'approved',
         promo_code: code,
+        reviewed_at: reviewedAt,
         admin_hidden: false,
       })
       .eq('id', item.id)
@@ -156,7 +158,13 @@ export default function RequestsPage() {
     setRequests((prev) =>
       prev.map((request) =>
         request.id === item.id
-          ? { ...request, status: 'approved', promo_code: code, admin_hidden: false }
+          ? {
+              ...request,
+              status: 'approved',
+              promo_code: code,
+              reviewed_at: reviewedAt,
+              admin_hidden: false,
+            }
           : request
       )
     )
@@ -167,6 +175,7 @@ export default function RequestsPage() {
   const rejectPayment = async (item) => {
     if (!supabase) return
 
+    const reviewedAt = new Date().toISOString()
     setProcessingId(item.id)
 
     const { error } = await supabase
@@ -174,6 +183,7 @@ export default function RequestsPage() {
       .update({
         status: 'rejected',
         promo_code: null,
+        reviewed_at: reviewedAt,
         admin_hidden: false,
       })
       .eq('id', item.id)
@@ -187,7 +197,13 @@ export default function RequestsPage() {
     setRequests((prev) =>
       prev.map((request) =>
         request.id === item.id
-          ? { ...request, status: 'rejected', promo_code: null, admin_hidden: false }
+          ? {
+              ...request,
+              status: 'rejected',
+              promo_code: null,
+              reviewed_at: reviewedAt,
+              admin_hidden: false,
+            }
           : request
       )
     )
@@ -205,6 +221,7 @@ export default function RequestsPage() {
       .update({
         status: 'pending',
         promo_code: null,
+        reviewed_at: null,
         admin_hidden: false,
       })
       .eq('id', item.id)
@@ -218,7 +235,13 @@ export default function RequestsPage() {
     setRequests((prev) =>
       prev.map((request) =>
         request.id === item.id
-          ? { ...request, status: 'pending', promo_code: null, admin_hidden: false }
+          ? {
+              ...request,
+              status: 'pending',
+              promo_code: null,
+              reviewed_at: null,
+              admin_hidden: false,
+            }
           : request
       )
     )
@@ -387,7 +410,7 @@ export default function RequestsPage() {
                       Статус: {getStatusLabel(item.status)}
                     </div>
                     <div className="text-base text-zinc-500">
-                      Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
+                      Дата заявки: {new Date(item.created_at).toLocaleString('ru-RU')}
                     </div>
 
                     <div className="mt-6 flex flex-wrap gap-3">
@@ -455,7 +478,8 @@ export default function RequestsPage() {
                     Статус: {getStatusLabel(item.status)}
                   </div>
                   <div className="text-base text-zinc-500">
-                    Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
+                    Дата решения:{' '}
+                    {new Date(item.reviewed_at || item.created_at).toLocaleString('ru-RU')}
                   </div>
 
                   {item.promo_code ? (

@@ -471,7 +471,7 @@ export default function HomePage({ user, profile }) {
     const { data, error } = await supabase
       .from('payment_requests')
       .select(
-        'id, user_id, username, plan_id, plan_name, price_label, image_path, status, created_at, promo_code, admin_hidden'
+        'id, user_id, username, plan_id, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden'
       )
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
@@ -1191,13 +1191,41 @@ export default function HomePage({ user, profile }) {
                       key={item.id}
                       className="rounded-[24px] border border-emerald-500/20 bg-emerald-500/10 p-5"
                     >
-                      <div className="grid gap-5 md:grid-cols-[1fr_auto] md:items-center">
-                        <div>
+                      <div className="grid gap-5 md:grid-cols-[1fr_auto] md:items-start">
+                        <div className="space-y-3">
                           <div className="break-words text-xl font-black leading-tight text-white sm:text-2xl">
                             {item.plan_name}
                           </div>
-                          <div className="mt-2 break-all text-zinc-200">
-                            Промокод: {item.promo_code}
+
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-200">
+                              <div className="text-xs uppercase tracking-wide text-zinc-500">
+                                Стоимость
+                              </div>
+                              <div className="mt-2 text-base font-bold">
+                                {item.price_label}
+                              </div>
+                            </div>
+
+                            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-200">
+                              <div className="text-xs uppercase tracking-wide text-zinc-500">
+                                Дата подтверждения
+                              </div>
+                              <div className="mt-2 text-base font-bold">
+                                {new Date(item.reviewed_at || item.created_at).toLocaleString(
+                                  'ru-RU'
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-emerald-300/20 bg-black/20 px-4 py-4">
+                            <div className="text-xs uppercase tracking-wide text-emerald-200">
+                              Промокод / товар
+                            </div>
+                            <div className="mt-2 break-all text-lg font-black text-white">
+                              {item.promo_code}
+                            </div>
                           </div>
                         </div>
 
