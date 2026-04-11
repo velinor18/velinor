@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { inspectReceiptImage, revokeReceiptPreviewUrl } from '../lib/receipt'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
+import { fetchPublishedReviews, fetchReviewsStats } from '../lib/reviews'
 
 const WIDGET_STORAGE_KEY = 'velinor_widget_hidden_until'
 const WIDGET_HIDE_HOURS = 12
@@ -143,6 +144,14 @@ function formatFileSize(size) {
   return `${Math.max(1, Math.round(safeSize / 1024))} КБ`
 }
 
+function formatDateTime(value) {
+  try {
+    return new Date(value).toLocaleString('ru-RU')
+  } catch {
+    return '—'
+  }
+}
+
 function GlowButton({ children, className = '', ...props }) {
   return (
     <button
@@ -279,7 +288,9 @@ export default function HomePage({ user, profile }) {
   const [siteStats, setSiteStats] = useState({
     clientsCount: 0,
     successRate: 0,
+    reviewsCount: 0,
   })
+  const [reviewsPreview, setReviewsPreview] = useState([])
 
   const paymentBlocked = isRestrictionActive(
     profile?.payment_is_blocked,
@@ -398,44 +409,73 @@ export default function HomePage({ user, profile }) {
       setSiteStats({
         clientsCount: 0,
         successRate: 0,
+        reviewsCount: 0,
       })
       return
     }
 
-    const { data, error } = await supabase.rpc('get_public_site_stats')
+    try {
+      const [{ data, error }, reviewsStats] = await Promise.all([
+        supabase.rpc('get_public_site_stats'),
+        fetchReviewsStats(),
+      ])
 
-    if (error) {
+      if (error) {
+        console.error(error)
+        setSiteStats({
+          clientsCount: 0,
+          successRate: 0,
+          reviewsCount: Number(reviewsStats?.published_reviews_count || 0),
+        })
+        return
+      }
+
+      const row = Array.isArray(data) ? data[0] : data
+      const totalRequests = Number(row?.total_requests ?? 0)
+      const approvedRequests = Number(row?.approved_requests ?? 0)
+      const uniqueBuyers = Number(row?.unique_buyers ?? 0)
+
+      const successRate =
+        totalRequests > 0 ? Math.round((approvedRequests / totalRequests) * 100) : 0
+
+      setSiteStats({
+        clientsCount: uniqueBuyers,
+        successRate,
+        reviewsCount: Number(reviewsStats?.published_reviews_count || 0),
+      })
+    } catch (error) {
       console.error(error)
       setSiteStats({
         clientsCount: 0,
         successRate: 0,
+        reviewsCount: 0,
       })
-      return
     }
+  }
 
-    const row = Array.isArray(data) ? data[0] : data
-    const totalRequests = Number(row?.total_requests ?? 0)
-    const approvedRequests = Number(row?.approved_requests ?? 0)
-    const uniqueBuyers = Number(row?.unique_buyers ?? 0)
-
-    const successRate =
-      totalRequests > 0 ? Math.round((approvedRequests / totalRequests) * 100) : 0
-
-    setSiteStats({
-      clientsCount: uniqueBuyers,
-      successRate,
-    })
+  async function loadReviewsPreview() {
+    try {
+      const items = await fetchPublishedReviews(3)
+      setReviewsPreview(items)
+    } catch (error) {
+      console.error(error)
+      setReviewsPreview([])
+    }
   }
 
   useEffect(() => {
     loadPublicStats()
+    loadReviewsPreview()
   }, [])
 
-  const stats = [
-    { value: `${siteStats.clientsCount}+`, label: 'клиентов' },
-    { value: `${siteStats.successRate}%`, label: 'успешных заявок' },
-    { value: '24/7', label: 'поддержка' },
-  ]
+  const stats = useMemo(
+    () => [
+      { value: `${siteStats.clientsCount}+`, label: 'клиентов' },
+      { value: `${siteStats.successRate}%`, label: 'успешных заявок' },
+      { value: `${siteStats.reviewsCount}+`, label: 'отзывов' },
+    ],
+    [siteStats]
+  )
 
   const closeWidget = () => {
     const nextShowTime = Date.now() + WIDGET_HIDE_HOURS * 60 * 60 * 1000
@@ -458,6 +498,10 @@ export default function HomePage({ user, profile }) {
     setPaymentMethod('card')
     clearUploadedReceipt()
     setIsPurchaseModalOpen(true)
+  }
+
+  const openReviewsPage = () => {
+    navigate('/reviews')
   }
 
   const loadOrders = async () => {
@@ -651,8 +695,15 @@ export default function HomePage({ user, profile }) {
               Выберите тариф, оплатите удобным способом и отправьте заявку на проверку.
             </p>
 
-            <div className="mt-10 flex items-center justify-center">
+            <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
               <GlowButton onClick={scrollToTariffs}>Перейти к тарифам</GlowButton>
+              <button
+                type="button"
+                onClick={openReviewsPage}
+                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+              >
+                Смотреть отзывы
+              </button>
             </div>
 
             <div className="mt-14 grid gap-5 sm:grid-cols-3">
@@ -716,6 +767,66 @@ export default function HomePage({ user, profile }) {
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section id="reviews-preview" className="scroll-mt-28 py-20">
+          <SectionTitle
+            title="Живые отзывы"
+            subtitle="Публичные отзывы пользователей после подтверждённых покупок"
+          />
+
+          <div className="mt-14 grid gap-6 lg:grid-cols-3">
+            {reviewsPreview.length === 0 ? (
+              <div className="col-span-full rounded-[30px] border border-fuchsia-500/10 bg-black/70 p-10 text-center shadow-[0_0_50px_rgba(0,0,0,0.35)]">
+                <div className="text-3xl font-black">Пока нет отзывов</div>
+                <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-zinc-400">
+                  После подтверждённых покупок пользователи смогут оставлять отзывы с изображениями.
+                </p>
+
+                <GlowButton className="mt-8" onClick={openReviewsPage}>
+                  Перейти к отзывам
+                </GlowButton>
+              </div>
+            ) : (
+              reviewsPreview.map((review) => (
+                <div
+                  key={review.id}
+                  className="overflow-hidden rounded-[30px] border border-fuchsia-500/10 bg-black/70 p-6 shadow-[0_0_50px_rgba(0,0,0,0.35)]"
+                >
+                  {review.review_images?.[0]?.image_url ? (
+                    <div className="overflow-hidden rounded-[22px] border border-fuchsia-500/15 bg-black">
+                      <img
+                        src={review.review_images[0].image_url}
+                        alt={review.username}
+                        className="h-[220px] w-full object-cover"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="mt-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="break-all text-xl font-black text-white">
+                        {review.username}
+                      </div>
+                      <div className="text-sm text-zinc-500">
+                        {formatDateTime(review.created_at)}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 line-clamp-6 whitespace-pre-wrap text-base leading-8 text-zinc-300">
+                      {review.review_text}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="mt-10 flex justify-center">
+            <GlowButton onClick={openReviewsPage}>Открыть все отзывы</GlowButton>
           </div>
         </section>
 

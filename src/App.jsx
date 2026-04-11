@@ -10,7 +10,7 @@ import AccountPage from './pages/AccountPage'
 import RequestsPage from './pages/RequestsPage'
 import RulesPage from './pages/RulesPage'
 import ChatPage from './pages/ChatPage'
-import AdminViolationsPage from './pages/AdminViolationsPage'
+import ReviewsPage from './pages/ReviewsPage'
 import { supabase } from './lib/supabase'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
@@ -210,6 +210,11 @@ export default function App() {
 
         <Route path="/rules" element={<RulesPage />} />
 
+        <Route
+          path="/reviews"
+          element={<ReviewsPage user={user} profile={profile} />}
+        />
+
         <Route path="/account" element={<Navigate to="/profile" replace />} />
 
         <Route
@@ -244,20 +249,6 @@ export default function App() {
               profileLoading={profileLoading}
             >
               <RequestsPage />
-            </AdminRoute>
-          }
-        />
-
-        <Route
-          path="/admin-violations"
-          element={
-            <AdminRoute
-              user={user}
-              profile={profile}
-              authLoading={authLoading}
-              profileLoading={profileLoading}
-            >
-              <AdminViolationsPage />
             </AdminRoute>
           }
         />

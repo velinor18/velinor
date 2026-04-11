@@ -101,6 +101,10 @@ export default function Header({ user, profile, authLoading }) {
               Тарифы
             </button>
 
+            <NavLink to="/reviews" className={linkClass}>
+              Отзывы
+            </NavLink>
+
             <button onClick={openPurchasesModal} className={plainButtonClass}>
               Мои покупки
             </button>
@@ -140,12 +144,6 @@ export default function Header({ user, profile, authLoading }) {
             {!authLoading && user && isAdmin && (
               <NavLink to="/requests" className={linkClass}>
                 Заявки
-              </NavLink>
-            )}
-
-            {!authLoading && user && isAdmin && (
-              <NavLink to="/admin-violations" className={linkClass}>
-                Нарушения
               </NavLink>
             )}
           </nav>
@@ -195,6 +193,14 @@ export default function Header({ user, profile, authLoading }) {
               >
                 Тарифы
               </button>
+
+              <NavLink
+                to="/reviews"
+                onClick={closeMobileMenu}
+                className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+              >
+                Отзывы
+              </NavLink>
 
               <button
                 onClick={openPurchasesModal}
@@ -265,16 +271,6 @@ export default function Header({ user, profile, authLoading }) {
                   className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
                 >
                   Заявки
-                </NavLink>
-              )}
-
-              {!authLoading && user && isAdmin && (
-                <NavLink
-                  to="/admin-violations"
-                  onClick={closeMobileMenu}
-                  className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                >
-                  Нарушения
                 </NavLink>
               )}
             </div>
