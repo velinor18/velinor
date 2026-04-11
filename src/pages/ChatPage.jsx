@@ -4,6 +4,9 @@ import { supabase } from '../lib/supabase'
 import { downloadAvatarAsObjectUrl, revokeObjectUrl } from '../lib/avatar'
 import { normalizeAvatarShape } from '../lib/avatarShapes'
 
+const INITIAL_MESSAGES_LIMIT = 40
+const OLDER_MESSAGES_LIMIT = 60
+
 function getAvatarShapeClass(shape) {
   const normalized = normalizeAvatarShape(shape)
 
@@ -36,42 +39,7 @@ function formatMessageTime(value) {
   }
 }
 
-function MessageAvatar({ username, avatarPath, avatarShape }) {
-  const [avatarUrl, setAvatarUrl] = useState('')
-
-  useEffect(() => {
-    let isMounted = true
-    let currentUrl = ''
-
-    async function loadAvatar() {
-      if (!avatarPath) {
-        if (isMounted) {
-          setAvatarUrl('')
-        }
-        return
-      }
-
-      const nextUrl = await downloadAvatarAsObjectUrl(avatarPath)
-
-      if (!isMounted) {
-        revokeObjectUrl(nextUrl)
-        return
-      }
-
-      currentUrl = nextUrl || ''
-      setAvatarUrl(currentUrl)
-    }
-
-    loadAvatar()
-
-    return () => {
-      isMounted = false
-      if (currentUrl) {
-        revokeObjectUrl(currentUrl)
-      }
-    }
-  }, [avatarPath])
-
+function MessageAvatar({ username, avatarUrl, avatarShape }) {
   const shapeClass = getAvatarShapeClass(avatarShape)
 
   return (
@@ -91,10 +59,8 @@ function MessageAvatar({ username, avatarPath, avatarShape }) {
   )
 }
 
-function ChatMessageItem({ item, isOwn, profileInfo }) {
+function ChatMessageItem({ item, isOwn, profileInfo, avatarUrl }) {
   const displayUsername = profileInfo?.username || item.username
-  const displayAvatarPath =
-    profileInfo?.avatar_path ?? item.avatar_path ?? null
   const displayAvatarShape =
     profileInfo?.avatar_shape ?? item.avatar_shape ?? 'circle'
 
@@ -103,7 +69,7 @@ function ChatMessageItem({ item, isOwn, profileInfo }) {
       {!isOwn ? (
         <MessageAvatar
           username={displayUsername}
-          avatarPath={displayAvatarPath}
+          avatarUrl={avatarUrl}
           avatarShape={displayAvatarShape}
         />
       ) : null}
@@ -132,7 +98,7 @@ function ChatMessageItem({ item, isOwn, profileInfo }) {
       {isOwn ? (
         <MessageAvatar
           username={displayUsername}
-          avatarPath={displayAvatarPath}
+          avatarUrl={avatarUrl}
           avatarShape={displayAvatarShape}
         />
       ) : null}
@@ -143,12 +109,16 @@ function ChatMessageItem({ item, isOwn, profileInfo }) {
 export default function ChatPage({ user, profile }) {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [hasOlderMessages, setHasOlderMessages] = useState(false)
   const [messageText, setMessageText] = useState('')
   const [sending, setSending] = useState(false)
   const [errorText, setErrorText] = useState('')
   const [profileDirectory, setProfileDirectory] = useState({})
+  const [avatarUrlDirectory, setAvatarUrlDirectory] = useState({})
 
   const bottomRef = useRef(null)
+  const chatViewportRef = useRef(null)
 
   const senderUsername = useMemo(() => {
     if (profile?.username) return profile.username
@@ -156,8 +126,15 @@ export default function ChatPage({ user, profile }) {
     return 'user'
   }, [profile?.username, user?.email])
 
-  const senderAvatarPath = profile?.avatar_path ?? null
-  const senderAvatarShape = profile?.avatar_shape ?? 'circle'
+  useEffect(() => {
+    return () => {
+      Object.values(avatarUrlDirectory).forEach((url) => {
+        if (url) {
+          revokeObjectUrl(url)
+        }
+      })
+    }
+  }, [avatarUrlDirectory])
 
   async function loadProfilesForUserIds(userIds) {
     if (!supabase || !userIds?.length) return
@@ -193,7 +170,49 @@ export default function ChatPage({ user, profile }) {
   useEffect(() => {
     let isMounted = true
 
-    async function loadMessages() {
+    async function loadMissingAvatarUrls() {
+      const entries = Object.entries(profileDirectory)
+      if (!entries.length) return
+
+      const nextUpdates = {}
+
+      for (const [userId, profileInfo] of entries) {
+        if (avatarUrlDirectory[userId] !== undefined) continue
+
+        if (!profileInfo?.avatar_path) {
+          nextUpdates[userId] = ''
+          continue
+        }
+
+        const nextUrl = await downloadAvatarAsObjectUrl(profileInfo.avatar_path)
+
+        if (!isMounted) {
+          revokeObjectUrl(nextUrl)
+          return
+        }
+
+        nextUpdates[userId] = nextUrl || ''
+      }
+
+      if (Object.keys(nextUpdates).length > 0) {
+        setAvatarUrlDirectory((prev) => ({
+          ...prev,
+          ...nextUpdates,
+        }))
+      }
+    }
+
+    loadMissingAvatarUrls()
+
+    return () => {
+      isMounted = false
+    }
+  }, [profileDirectory])
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadInitialMessages() {
       if (!supabase || !user) {
         if (isMounted) {
           setMessages([])
@@ -209,7 +228,8 @@ export default function ChatPage({ user, profile }) {
         .select(
           'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
         )
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
+        .limit(INITIAL_MESSAGES_LIMIT)
 
       if (!isMounted) return
 
@@ -220,15 +240,16 @@ export default function ChatPage({ user, profile }) {
         return
       }
 
-      const nextMessages = data ?? []
+      const nextMessages = [...(data ?? [])].reverse()
       setMessages(nextMessages)
+      setHasOlderMessages((data?.length ?? 0) === INITIAL_MESSAGES_LIMIT)
       setLoading(false)
 
       const userIds = nextMessages.map((item) => item.user_id)
       await loadProfilesForUserIds(userIds)
     }
 
-    loadMessages()
+    loadInitialMessages()
 
     return () => {
       isMounted = false
@@ -278,6 +299,47 @@ export default function ChatPage({ user, profile }) {
     return () => clearTimeout(timer)
   }, [errorText])
 
+  async function handleLoadOlder() {
+    if (!supabase || !user || !messages.length || loadingOlder) {
+      return
+    }
+
+    setLoadingOlder(true)
+
+    const oldestCreatedAt = messages[0]?.created_at
+
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select(
+        'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
+      )
+      .lt('created_at', oldestCreatedAt)
+      .order('created_at', { ascending: false })
+      .limit(OLDER_MESSAGES_LIMIT)
+
+    setLoadingOlder(false)
+
+    if (error) {
+      console.error(error)
+      setErrorText('Не удалось загрузить старые сообщения')
+      return
+    }
+
+    const olderMessages = [...(data ?? [])].reverse()
+
+    setMessages((prev) => [...olderMessages, ...prev])
+    setHasOlderMessages((data?.length ?? 0) === OLDER_MESSAGES_LIMIT)
+
+    const userIds = olderMessages.map((item) => item.user_id)
+    await loadProfilesForUserIds(userIds)
+
+    requestAnimationFrame(() => {
+      if (chatViewportRef.current) {
+        chatViewportRef.current.scrollTop = 120
+      }
+    })
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
 
@@ -303,8 +365,8 @@ export default function ChatPage({ user, profile }) {
     const { error } = await supabase.from('chat_messages').insert({
       user_id: user.id,
       username: senderUsername,
-      avatar_path: senderAvatarPath,
-      avatar_shape: senderAvatarShape,
+      avatar_path: profile?.avatar_path ?? null,
+      avatar_shape: profile?.avatar_shape ?? 'circle',
       message_text: trimmed,
     })
 
@@ -344,38 +406,49 @@ export default function ChatPage({ user, profile }) {
   return (
     <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
       <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-4 shadow-[0_0_60px_rgba(168,85,247,0.08)] sm:p-6">
-        <div className="flex flex-col gap-3 border-b border-fuchsia-500/10 pb-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-4xl font-black">Общий чат</h1>
-            <div className="mt-2 text-sm text-zinc-400">
-              Сообщения появляются в реальном времени.
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-fuchsia-500/15 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
-            Вы вошли как <span className="font-bold text-white">{senderUsername}</span>
-          </div>
+        <div className="border-b border-fuchsia-500/10 pb-5">
+          <h1 className="text-4xl font-black">Общий чат</h1>
         </div>
 
-        <div className="mt-6 h-[52vh] min-h-[420px] overflow-y-auto rounded-[28px] border border-fuchsia-500/10 bg-black/30 p-4 sm:p-5">
+        <div
+          ref={chatViewportRef}
+          className="mt-6 h-[52vh] min-h-[420px] overflow-y-auto rounded-[28px] border border-fuchsia-500/10 bg-black/30 p-4 sm:p-5"
+        >
           {loading ? (
             <div className="flex h-full items-center justify-center text-zinc-400">
               Загружаем сообщения...
             </div>
-          ) : messages.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-center text-zinc-500">
-              Пока сообщений нет. Напишите первым.
-            </div>
           ) : (
             <div className="space-y-4">
-              {messages.map((item) => (
-                <ChatMessageItem
-                  key={item.id}
-                  item={item}
-                  isOwn={item.user_id === user.id}
-                  profileInfo={profileDirectory[item.user_id]}
-                />
-              ))}
+              {hasOlderMessages ? (
+                <div className="flex justify-center pb-2">
+                  <button
+                    type="button"
+                    onClick={handleLoadOlder}
+                    disabled={loadingOlder}
+                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+                  >
+                    {loadingOlder ? 'Загружаем...' : 'Показать более старые'}
+                  </button>
+                </div>
+              ) : null}
+
+              {messages.length === 0 ? (
+                <div className="flex h-[320px] items-center justify-center text-center text-zinc-500">
+                  Пока сообщений нет. Напишите первым.
+                </div>
+              ) : (
+                messages.map((item) => (
+                  <ChatMessageItem
+                    key={item.id}
+                    item={item}
+                    isOwn={item.user_id === user.id}
+                    profileInfo={profileDirectory[item.user_id]}
+                    avatarUrl={avatarUrlDirectory[item.user_id] || ''}
+                  />
+                ))
+              )}
+
               <div ref={bottomRef} />
             </div>
           )}
