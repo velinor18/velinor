@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { inspectReceiptImage, revokeReceiptPreviewUrl } from '../lib/receipt'
@@ -257,6 +257,7 @@ function getStatusLabel(status) {
 
 export default function HomePage({ user, profile }) {
   const navigate = useNavigate()
+  const receiptPreviewUrlRef = useRef('')
 
   const [isWidgetVisible, setIsWidgetVisible] = useState(false)
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false)
@@ -302,16 +303,30 @@ export default function HomePage({ user, profile }) {
 
   useEffect(() => {
     return () => {
-      if (uploadedReceipt?.previewUrl) {
-        revokeReceiptPreviewUrl(uploadedReceipt.previewUrl)
+      if (receiptPreviewUrlRef.current) {
+        revokeReceiptPreviewUrl(receiptPreviewUrlRef.current)
       }
     }
-  }, [uploadedReceipt?.previewUrl])
+  }, [])
+
+  const replaceUploadedReceipt = useCallback((nextReceipt) => {
+    setUploadedReceipt((prevReceipt) => {
+      if (
+        prevReceipt?.previewUrl &&
+        prevReceipt.previewUrl !== nextReceipt?.previewUrl
+      ) {
+        revokeReceiptPreviewUrl(prevReceipt.previewUrl)
+      }
+
+      receiptPreviewUrlRef.current = nextReceipt?.previewUrl || ''
+      return nextReceipt
+    })
+  }, [])
 
   const clearUploadedReceipt = useCallback(() => {
-    setUploadedReceipt(null)
+    replaceUploadedReceipt(null)
     setIsReceiptDragActive(false)
-  }, [])
+  }, [replaceUploadedReceipt])
 
   const closePurchaseModal = useCallback(() => {
     setIsPurchaseModalOpen(false)
@@ -319,7 +334,7 @@ export default function HomePage({ user, profile }) {
   }, [clearUploadedReceipt])
 
   const handleReceiptSelected = useCallback(
-    async (file) => {
+    async (file, mode = 'select') => {
       if (paymentBlocked) {
         setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
         return
@@ -332,16 +347,21 @@ export default function HomePage({ user, profile }) {
         return
       }
 
-      setUploadedReceipt({
+      replaceUploadedReceipt({
         file,
         previewUrl: result.previewUrl,
         width: result.width,
         height: result.height,
+        previewKey: `${Date.now()}_${Math.random()}`,
       })
 
-      setToast('Скриншот загружен')
+      if (mode === 'paste') {
+        setToast('Скриншот заменён через Ctrl+V')
+      } else {
+        setToast('Скриншот загружен')
+      }
     },
-    [paymentBlocked, paymentBlockedUntilText]
+    [paymentBlocked, paymentBlockedUntilText, replaceUploadedReceipt]
   )
 
   useEffect(() => {
@@ -349,33 +369,24 @@ export default function HomePage({ user, profile }) {
 
     const handlePaste = async (event) => {
       const items = Array.from(event.clipboardData?.items || [])
-      const imageItem = items.find((item) => item.type.startsWith('image/'))
+      const imageItem = items.find(
+        (item) => item.kind === 'file' && item.type.startsWith('image/')
+      )
 
       if (!imageItem) return
-
-      if (paymentBlocked) {
-        setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
-        return
-      }
 
       const file = imageItem.getAsFile()
       if (!file) return
 
       event.preventDefault()
-      await handleReceiptSelected(file)
-      setToast('Скриншот заменён через Ctrl+V')
+      await handleReceiptSelected(file, 'paste')
     }
 
     window.addEventListener('paste', handlePaste)
     return () => {
       window.removeEventListener('paste', handlePaste)
     }
-  }, [
-    isPurchaseModalOpen,
-    paymentBlocked,
-    paymentBlockedUntilText,
-    handleReceiptSelected,
-  ])
+  }, [isPurchaseModalOpen, handleReceiptSelected])
 
   async function loadPublicStats() {
     if (!supabase) {
@@ -500,7 +511,7 @@ export default function HomePage({ user, profile }) {
     const file = e.target.files?.[0]
     if (!file) return
 
-    await handleReceiptSelected(file)
+    await handleReceiptSelected(file, 'select')
     e.target.value = ''
   }
 
@@ -952,7 +963,7 @@ export default function HomePage({ user, profile }) {
                   const file = event.dataTransfer?.files?.[0]
                   if (!file) return
 
-                  await handleReceiptSelected(file)
+                  await handleReceiptSelected(file, 'select')
                 }}
                 className={`flex min-h-[200px] flex-col items-center justify-center rounded-[24px] border-2 border-dashed p-6 text-center transition ${
                   paymentBlocked
@@ -1001,7 +1012,10 @@ export default function HomePage({ user, profile }) {
                   </button>
                 </div>
 
-                <div className="mt-4 overflow-hidden rounded-[22px] border border-fuchsia-500/15 bg-black">
+                <div
+                  key={uploadedReceipt.previewKey}
+                  className="mt-4 overflow-hidden rounded-[22px] border border-fuchsia-500/15 bg-black"
+                >
                   <img
                     src={uploadedReceipt.previewUrl}
                     alt="Предпросмотр скриншота оплаты"
