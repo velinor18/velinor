@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { downloadAvatarAsObjectUrl, revokeObjectUrl } from '../lib/avatar'
@@ -106,7 +106,7 @@ function ChatMessageItem({ item, isOwn, profileInfo, avatarUrl }) {
   )
 }
 
-export default function ChatPage({ user, profile }) {
+export default function ChatPage({ user }) {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -301,7 +301,7 @@ export default function ChatPage({ user, profile }) {
 
   useEffect(() => {
     if (!errorText) return
-    const timer = setTimeout(() => setErrorText(''), 3200)
+    const timer = setTimeout(() => setErrorText(''), 3600)
     return () => clearTimeout(timer)
   }, [errorText])
 
@@ -376,14 +376,12 @@ export default function ChatPage({ user, profile }) {
 
     if (error) {
       console.error(error)
-      setErrorText('Не удалось отправить сообщение')
+      setErrorText(error.message || 'Не удалось отправить сообщение')
       return
     }
 
-    const result = data
-
-    if (!result?.ok) {
-      setErrorText(result?.message || 'Сообщение отклонено')
+    if (!data?.ok) {
+      setErrorText(data?.message || 'Сообщение отклонено')
       return
     }
 
