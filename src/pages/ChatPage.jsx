@@ -119,6 +119,7 @@ export default function ChatPage({ user, profile }) {
 
   const bottomRef = useRef(null)
   const chatViewportRef = useRef(null)
+  const avatarUrlDirectoryRef = useRef({})
 
   const senderUsername = useMemo(() => {
     if (profile?.username) return profile.username
@@ -127,14 +128,19 @@ export default function ChatPage({ user, profile }) {
   }, [profile?.username, user?.email])
 
   useEffect(() => {
+    avatarUrlDirectoryRef.current = avatarUrlDirectory
+  }, [avatarUrlDirectory])
+
+  useEffect(() => {
     return () => {
-      Object.values(avatarUrlDirectory).forEach((url) => {
+      const current = avatarUrlDirectoryRef.current
+      Object.values(current).forEach((url) => {
         if (url) {
           revokeObjectUrl(url)
         }
       })
     }
-  }, [avatarUrlDirectory])
+  }, [])
 
   async function loadProfilesForUserIds(userIds) {
     if (!supabase || !userIds?.length) return
@@ -174,13 +180,17 @@ export default function ChatPage({ user, profile }) {
       const entries = Object.entries(profileDirectory)
       if (!entries.length) return
 
-      const nextUpdates = {}
-
       for (const [userId, profileInfo] of entries) {
-        if (avatarUrlDirectory[userId] !== undefined) continue
+        if (avatarUrlDirectoryRef.current[userId] !== undefined) continue
 
         if (!profileInfo?.avatar_path) {
-          nextUpdates[userId] = ''
+          if (!isMounted) return
+          setAvatarUrlDirectory((prev) => {
+            if (prev[userId] !== undefined) return prev
+            const next = { ...prev, [userId]: '' }
+            avatarUrlDirectoryRef.current = next
+            return next
+          })
           continue
         }
 
@@ -191,14 +201,16 @@ export default function ChatPage({ user, profile }) {
           return
         }
 
-        nextUpdates[userId] = nextUrl || ''
-      }
+        setAvatarUrlDirectory((prev) => {
+          if (prev[userId] !== undefined) {
+            revokeObjectUrl(nextUrl)
+            return prev
+          }
 
-      if (Object.keys(nextUpdates).length > 0) {
-        setAvatarUrlDirectory((prev) => ({
-          ...prev,
-          ...nextUpdates,
-        }))
+          const next = { ...prev, [userId]: nextUrl || '' }
+          avatarUrlDirectoryRef.current = next
+          return next
+        })
       }
     }
 
