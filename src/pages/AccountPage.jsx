@@ -8,7 +8,6 @@ import {
   revokeObjectUrl,
   uploadAvatarBlob,
 } from '../lib/avatar'
-import { normalizeAvatarShape } from '../lib/avatarShapes'
 import {
   getStrikeReasonLabel,
   getViolationSourceLabel,
@@ -84,72 +83,6 @@ async function copyText(text) {
   return fallbackCopyText(text)
 }
 
-function InfoCard({ label, value, valueClassName = '' }) {
-  return (
-    <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
-      <div className="text-sm uppercase tracking-wide text-zinc-500">
-        {label}
-      </div>
-
-      <div
-        className={`mt-3 break-words text-xl font-black text-white sm:text-2xl ${valueClassName}`}
-      >
-        {value}
-      </div>
-    </div>
-  )
-}
-
-function CompactProfileCard({
-  username,
-  telegramLabel,
-  telegramUsername,
-  blocked,
-  blockedUntilText,
-  isAdmin,
-  userEmail,
-}) {
-  return (
-    <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-5 sm:p-6">
-      <div className="text-sm uppercase tracking-wide text-zinc-500">Логин</div>
-
-      <div className="mt-3 break-words text-2xl font-black text-white sm:text-3xl">
-        {username}
-      </div>
-
-      <div className="mt-5 space-y-3">
-        <div className="rounded-2xl border border-fuchsia-500/10 bg-white/[0.03] px-4 py-3">
-          <div className="text-xs uppercase tracking-wide text-zinc-500">
-            Telegram
-          </div>
-          <div className="mt-2 break-all text-sm font-semibold text-zinc-200">
-            {telegramUsername ? `@${telegramUsername}` : telegramLabel}
-          </div>
-        </div>
-
-        {blocked ? (
-          <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-200">
-            Аккаунт заблокирован.
-            <br />
-            До: {blockedUntilText}
-          </div>
-        ) : null}
-
-        {isAdmin ? (
-          <div className="rounded-2xl border border-fuchsia-500/10 bg-white/[0.03] px-4 py-3">
-            <div className="text-xs uppercase tracking-wide text-zinc-500">
-              Технический email
-            </div>
-            <div className="mt-2 break-all text-sm font-semibold text-zinc-200">
-              {userEmail || '—'}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  )
-}
-
 function StatusIcon({
   active,
   children,
@@ -183,9 +116,6 @@ function ViolationDetailsModal({ item, onClose }) {
           <div>
             <div className="text-2xl font-black text-white">
               Детали нарушения
-            </div>
-            <div className="mt-1 text-sm text-zinc-400">
-              Полная информация по подтверждённому нарушению
             </div>
           </div>
 
@@ -243,9 +173,9 @@ function ViolationDetailsModal({ item, onClose }) {
 
 function TelegramStatusCard({
   isLinked,
-  linkedLabel,
-  linkedAtText,
+  statusText,
   telegramUsername,
+  linkedAtText,
   loading,
   actionLoading,
   onRefresh,
@@ -254,106 +184,96 @@ function TelegramStatusCard({
   onCopyUsername,
   onUnlink,
 }) {
+  const topLabel = isLinked ? 'Username Telegram' : 'Статус'
+  const topValue = isLinked
+    ? `@${telegramUsername}`
+    : statusText
+
   return (
     <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6 sm:p-7">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="text-sm uppercase tracking-wide text-zinc-500">
-                Telegram
-              </div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="text-sm uppercase tracking-wide text-zinc-500">
+          Telegram
+        </div>
 
-              <div className="mt-3 break-words text-2xl font-black text-white sm:text-3xl">
-                {linkedLabel}
-              </div>
-            </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading || actionLoading}
+          className="shrink-0 rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+        >
+          Обновить статус
+        </button>
+      </div>
 
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={loading || actionLoading}
-              className="shrink-0 rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
-            >
-              Обновить
-            </button>
+      <div className="mt-5 rounded-2xl border border-fuchsia-500/10 bg-white/[0.03] px-4 py-4">
+        <div className="text-xs uppercase tracking-wide text-zinc-500">
+          {topLabel}
+        </div>
+
+        <div className="mt-2 overflow-x-auto whitespace-nowrap text-base font-semibold text-zinc-100 sm:text-lg">
+          {topValue}
+        </div>
+
+        {isLinked && linkedAtText !== '—' ? (
+          <div className="mt-3 text-xs text-zinc-500">
+            Привязан: {linkedAtText}
           </div>
+        ) : null}
+      </div>
 
-          {telegramUsername ? (
-            <div className="mt-4 rounded-2xl border border-fuchsia-500/10 bg-white/[0.03] px-4 py-4">
-              <div className="text-xs uppercase tracking-wide text-zinc-500">
-                Username Telegram
-              </div>
-              <div className="mt-2 break-all text-base font-semibold text-zinc-100 sm:text-lg">
-                @{telegramUsername}
-              </div>
-            </div>
-          ) : null}
-
-          {isLinked && linkedAtText !== '—' ? (
-            <div className="mt-4 rounded-2xl border border-fuchsia-500/10 bg-white/[0.03] px-4 py-4">
-              <div className="text-xs uppercase tracking-wide text-zinc-500">
-                Дата привязки
-              </div>
-              <div className="mt-2 text-sm font-semibold text-zinc-200 sm:text-base">
-                {linkedAtText}
-              </div>
-            </div>
-          ) : null}
-
-          {!isLinked ? (
-            <div className="mt-4 rounded-2xl border border-fuchsia-500/10 bg-white/[0.03] px-4 py-4 text-sm leading-7 text-zinc-300">
-              Нажмите кнопку привязки. Сайт создаст одноразовый код и сразу откроет
-              Telegram-бота. После этого нажмите Start в боте и затем вручную
-              обновите статус в этой карточке.
-            </div>
-          ) : (
-            <div className="mt-4 rounded-2xl border border-fuchsia-500/10 bg-white/[0.03] px-4 py-4 text-sm leading-7 text-zinc-300">
-              Этот Telegram уже привязан к вашему аккаунту. Вы можете открыть бота,
-              скопировать username бота или отвязать текущую привязку.
-            </div>
-          )}
-        </div>
-
-        <div className="w-full lg:w-[320px] lg:shrink-0">
-          {isLinked ? (
-            <div className="space-y-3">
-              <button
-                type="button"
-                onClick={onOpenBot}
-                className="w-full rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
-              >
-                Открыть бота
-              </button>
-
-              <button
-                type="button"
-                onClick={onCopyUsername}
-                className="w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-              >
-                Скопировать username
-              </button>
-
-              <button
-                type="button"
-                onClick={onUnlink}
-                disabled={actionLoading}
-                className="w-full rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
-              >
-                {actionLoading ? 'Отвязываем...' : 'Отвязать'}
-              </button>
-            </div>
-          ) : (
+      <div className="mx-auto mt-8 w-full max-w-[420px] space-y-3">
+        {isLinked ? (
+          <>
             <button
               type="button"
-              onClick={onLink}
-              disabled={actionLoading}
-              className="w-full rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
+              onClick={onOpenBot}
+              className="w-full rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
             >
-              {actionLoading ? 'Создаём код...' : 'Привязать Telegram'}
+              Открыть бота
             </button>
-          )}
-        </div>
+
+            <button
+              type="button"
+              onClick={onCopyUsername}
+              className="w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+            >
+              Скопировать username
+            </button>
+
+            <button
+              type="button"
+              onClick={onUnlink}
+              disabled={actionLoading}
+              className="w-full rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
+            >
+              {actionLoading ? 'Отвязываем...' : 'Отвязать'}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={onLink}
+            disabled={actionLoading}
+            className="w-full rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
+          >
+            {actionLoading ? 'Создаём код...' : 'Привязать Telegram'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AdminEmailCard({ email }) {
+  return (
+    <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
+      <div className="text-sm uppercase tracking-wide text-zinc-500">
+        Технический email
+      </div>
+
+      <div className="mt-3 break-all text-lg font-semibold text-zinc-200">
+        {email || '—'}
       </div>
     </div>
   )
@@ -551,20 +471,16 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
   const isTelegramLinked = Boolean(profileView?.telegram_user_id)
 
-  const linkedTelegramLabel =
+  const telegramStatusText =
     profileLoading || telegramSectionLoading
       ? 'Загрузка...'
-      : profileView?.telegram_username
-        ? `@${profileView.telegram_username}`
-        : isTelegramLinked
-          ? 'Telegram привязан'
-          : 'Не подключён'
+      : isTelegramLinked
+        ? 'Подключён'
+        : 'Не подключён'
 
   const telegramLinkedAtText = profileView?.telegram_linked_at
     ? new Date(profileView.telegram_linked_at).toLocaleString('ru-RU')
     : '—'
-
-  const avatarShape = normalizeAvatarShape(profileView?.avatar_shape)
 
   const openTelegramBot = (codeOverride = '') => {
     const url = codeOverride
@@ -638,27 +554,14 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return
     }
 
-    const safeNextShape = normalizeAvatarShape(nextShape)
-    const currentShape = normalizeAvatarShape(profileView?.avatar_shape)
-
-    if (safeNextShape === currentShape) {
-      return
-    }
-
-    setShapeSaving(true)
-    setAvatarMessage('')
-    setAvatarError('')
-
     const { data, error } = await supabase
       .from('profiles')
       .update({
-        avatar_shape: safeNextShape,
+        avatar_shape: nextShape,
       })
       .eq('id', user.id)
       .select(PROFILE_SELECT_QUERY)
       .single()
-
-    setShapeSaving(false)
 
     if (error || !data) {
       console.error(error)
@@ -802,39 +705,20 @@ export default function AccountPage({ user, profile, profileLoading }) {
   return (
     <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
       <div className="grid gap-8 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="space-y-5">
-          <AvatarUploader
-            username={profileView?.username ?? user?.email ?? 'U'}
-            avatarUrl={avatarObjectUrl}
-            shape={avatarShape}
-            loading={avatarLoading || profileLoading}
-            saving={avatarSaving}
-            shapeSaving={shapeSaving}
-            onSave={handleAvatarSave}
-            onShapeChange={handleAvatarShapeChange}
-          />
-
-          <CompactProfileCard
-            username={profileLoading ? 'Загрузка...' : profileView?.username ?? '—'}
-            telegramLabel={linkedTelegramLabel}
-            telegramUsername={profileView?.telegram_username ?? ''}
-            blocked={!isAdmin && Boolean(profileView?.is_blocked)}
-            blockedUntilText={blockedUntilText}
-            isAdmin={isAdmin}
-            userEmail={user?.email ?? '—'}
-          />
-        </div>
+        <AvatarUploader
+          username={profileView?.username ?? user?.email ?? '—'}
+          avatarUrl={avatarObjectUrl}
+          shape={profileView?.avatar_shape}
+          loading={avatarLoading || profileLoading}
+          saving={avatarSaving}
+          shapeSaving={shapeSaving}
+          onSave={handleAvatarSave}
+          onShapeChange={handleAvatarShapeChange}
+        />
 
         <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h1 className="text-4xl font-black">Профиль</h1>
-
-              <p className="mt-3 max-w-3xl text-zinc-400">
-                Здесь находится ваш профиль. Основная информация о Telegram,
-                нарушениях и безопасности аккаунта собрана ниже.
-              </p>
-            </div>
+          <div className="flex items-start justify-between gap-4">
+            <h1 className="text-4xl font-black">Профиль</h1>
 
             <NavLink
               to="/rules"
@@ -862,12 +746,20 @@ export default function AccountPage({ user, profile, profileLoading }) {
             </div>
           ) : null}
 
+          {!isAdmin && profileView?.is_blocked ? (
+            <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm leading-6 text-red-200">
+              Аккаунт сейчас заблокирован.
+              <br />
+              Срок блокировки до: {blockedUntilText}
+            </div>
+          ) : null}
+
           <div className="mt-8">
             <TelegramStatusCard
               isLinked={isTelegramLinked}
-              linkedLabel={linkedTelegramLabel}
-              linkedAtText={telegramLinkedAtText}
+              statusText={telegramStatusText}
               telegramUsername={profileView?.telegram_username ?? ''}
+              linkedAtText={telegramLinkedAtText}
               loading={telegramSectionLoading}
               actionLoading={telegramActionLoading}
               onRefresh={handleRefreshTelegram}
@@ -877,6 +769,12 @@ export default function AccountPage({ user, profile, profileLoading }) {
               onUnlink={handleUnlinkTelegram}
             />
           </div>
+
+          {isAdmin ? (
+            <div className="mt-5">
+              <AdminEmailCard email={user?.email ?? '—'} />
+            </div>
+          ) : null}
 
           <div className="mt-8 grid gap-5 lg:grid-cols-2">
             <div className="rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
@@ -930,9 +828,6 @@ export default function AccountPage({ user, profile, profileLoading }) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-3xl font-black">История нарушений</h2>
-                <p className="mt-3 max-w-2xl text-zinc-400">
-                  Нажмите на нарушение, чтобы открыть его в полном виде.
-                </p>
               </div>
 
               <div className="rounded-2xl border border-fuchsia-500/15 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
@@ -984,10 +879,6 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
           <div className="mt-8 rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
             <h2 className="text-3xl font-black">Смена пароля</h2>
-
-            <p className="mt-3 max-w-2xl text-zinc-400">
-              Для смены пароля введите текущий пароль, затем новый пароль и повторите его.
-            </p>
 
             <form className="mt-8 space-y-5" onSubmit={handleChangePassword}>
               <div>
