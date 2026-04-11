@@ -121,12 +121,6 @@ export default function ChatPage({ user, profile }) {
   const chatViewportRef = useRef(null)
   const avatarUrlDirectoryRef = useRef({})
 
-  const senderUsername = useMemo(() => {
-    if (profile?.username) return profile.username
-    if (user?.email) return user.email.split('@')[0]
-    return 'user'
-  }, [profile?.username, user?.email])
-
   useEffect(() => {
     avatarUrlDirectoryRef.current = avatarUrlDirectory
   }, [avatarUrlDirectory])
@@ -307,7 +301,7 @@ export default function ChatPage({ user, profile }) {
 
   useEffect(() => {
     if (!errorText) return
-    const timer = setTimeout(() => setErrorText(''), 2600)
+    const timer = setTimeout(() => setErrorText(''), 3200)
     return () => clearTimeout(timer)
   }, [errorText])
 
@@ -374,12 +368,8 @@ export default function ChatPage({ user, profile }) {
 
     setSending(true)
 
-    const { error } = await supabase.from('chat_messages').insert({
-      user_id: user.id,
-      username: senderUsername,
-      avatar_path: profile?.avatar_path ?? null,
-      avatar_shape: profile?.avatar_shape ?? 'circle',
-      message_text: trimmed,
+    const { data, error } = await supabase.rpc('send_chat_message', {
+      p_text: trimmed,
     })
 
     setSending(false)
@@ -387,6 +377,13 @@ export default function ChatPage({ user, profile }) {
     if (error) {
       console.error(error)
       setErrorText('Не удалось отправить сообщение')
+      return
+    }
+
+    const result = data
+
+    if (!result?.ok) {
+      setErrorText(result?.message || 'Сообщение отклонено')
       return
     }
 
