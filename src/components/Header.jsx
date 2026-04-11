@@ -142,6 +142,12 @@ export default function Header({ user, profile, authLoading }) {
                 Заявки
               </NavLink>
             )}
+
+            {!authLoading && user && isAdmin && (
+              <NavLink to="/admin-violations" className={linkClass}>
+                Нарушения
+              </NavLink>
+            )}
           </nav>
 
           <button
@@ -259,6 +265,16 @@ export default function Header({ user, profile, authLoading }) {
                   className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
                 >
                   Заявки
+                </NavLink>
+              )}
+
+              {!authLoading && user && isAdmin && (
+                <NavLink
+                  to="/admin-violations"
+                  onClick={closeMobileMenu}
+                  className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                >
+                  Нарушения
                 </NavLink>
               )}
             </div>
