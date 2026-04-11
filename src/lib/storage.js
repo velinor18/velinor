@@ -1,23 +1,55 @@
 import { supabase } from './supabase'
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const SIGNED_URL_TTL_MS = 50 * 60 * 1000
 
-export async function downloadPrivateImageAsObjectUrl(path, attempts = 4, delayMs = 700) {
+const signedUrlCache = new Map()
+const pendingSignedUrlRequests = new Map()
+
+function getCacheKey(bucket, path) {
+  return `${bucket}:${path}`
+}
+
+async function createSignedStorageUrl(bucket, path, expiresInSeconds = 3600) {
   if (!supabase || !path) return null
 
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const { data, error } = await supabase.storage
-      .from('payment-screenshots')
-      .download(path)
+  const cacheKey = getCacheKey(bucket, path)
+  const cached = signedUrlCache.get(cacheKey)
 
-    if (!error && data) {
-      return URL.createObjectURL(data)
-    }
-
-    if (attempt < attempts - 1) {
-      await sleep(delayMs)
-    }
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url
   }
 
-  return null
+  const pending = pendingSignedUrlRequests.get(cacheKey)
+  if (pending) {
+    return pending
+  }
+
+  const request = (async () => {
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(path, expiresInSeconds)
+
+    if (error || !data?.signedUrl) {
+      return null
+    }
+
+    signedUrlCache.set(cacheKey, {
+      url: data.signedUrl,
+      expiresAt: Date.now() + SIGNED_URL_TTL_MS,
+    })
+
+    return data.signedUrl
+  })()
+
+  pendingSignedUrlRequests.set(cacheKey, request)
+
+  try {
+    return await request
+  } finally {
+    pendingSignedUrlRequests.delete(cacheKey)
+  }
+}
+
+export async function downloadPrivateImageAsObjectUrl(path) {
+  return createSignedStorageUrl('payment-screenshots', path, 3600)
 }

@@ -3,7 +3,10 @@ import { supabase } from './supabase'
 export const MAX_AVATAR_SIZE = 5 * 1024 * 1024
 export const ALLOWED_AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const SIGNED_URL_TTL_MS = 50 * 60 * 1000
+
+const signedUrlCache = new Map()
+const pendingSignedUrlRequests = new Map()
 
 function getSafeMimeType(mimeType) {
   if (ALLOWED_AVATAR_TYPES.includes(mimeType)) {
@@ -28,6 +31,57 @@ function createImage(imageSrc) {
     image.onerror = () => reject(new Error('Не удалось загрузить изображение'))
     image.src = imageSrc
   })
+}
+
+function getCacheKey(bucket, path) {
+  return `${bucket}:${path}`
+}
+
+function invalidateSignedUrlCache(bucket, path) {
+  if (!path) return
+  signedUrlCache.delete(getCacheKey(bucket, path))
+  pendingSignedUrlRequests.delete(getCacheKey(bucket, path))
+}
+
+async function createSignedStorageUrl(bucket, path, expiresInSeconds = 3600) {
+  if (!supabase || !path) return null
+
+  const cacheKey = getCacheKey(bucket, path)
+  const cached = signedUrlCache.get(cacheKey)
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url
+  }
+
+  const pending = pendingSignedUrlRequests.get(cacheKey)
+  if (pending) {
+    return pending
+  }
+
+  const request = (async () => {
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(path, expiresInSeconds)
+
+    if (error || !data?.signedUrl) {
+      return null
+    }
+
+    signedUrlCache.set(cacheKey, {
+      url: data.signedUrl,
+      expiresAt: Date.now() + SIGNED_URL_TTL_MS,
+    })
+
+    return data.signedUrl
+  })()
+
+  pendingSignedUrlRequests.set(cacheKey, request)
+
+  try {
+    return await request
+  } finally {
+    pendingSignedUrlRequests.delete(cacheKey)
+  }
 }
 
 export function validateAvatarFile(file) {
@@ -70,7 +124,7 @@ export async function uploadAvatarBlob(userId, blob) {
     .from('profile-avatars')
     .upload(path, blob, {
       upsert: false,
-      cacheControl: '60',
+      cacheControl: '3600',
       contentType: safeMimeType,
     })
 
@@ -83,6 +137,8 @@ export async function uploadAvatarBlob(userId, blob) {
 export async function removeAvatarByPath(path) {
   if (!supabase || !path) return
 
+  invalidateSignedUrlCache('profile-avatars', path)
+
   const { error } = await supabase.storage
     .from('profile-avatars')
     .remove([path])
@@ -92,24 +148,8 @@ export async function removeAvatarByPath(path) {
   }
 }
 
-export async function downloadAvatarAsObjectUrl(path, attempts = 4, delayMs = 250) {
-  if (!supabase || !path) return null
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const { data, error } = await supabase.storage
-      .from('profile-avatars')
-      .download(path)
-
-    if (!error && data) {
-      return URL.createObjectURL(data)
-    }
-
-    if (attempt < attempts - 1) {
-      await sleep(delayMs)
-    }
-  }
-
-  return null
+export async function downloadAvatarAsObjectUrl(path) {
+  return createSignedStorageUrl('profile-avatars', path, 3600)
 }
 
 export function revokeObjectUrl(url) {
@@ -138,6 +178,10 @@ export async function getCroppedAvatarBlob(
 
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
+
+  if (!ctx) {
+    throw new Error('Не удалось подготовить изображение')
+  }
 
   canvas.width = targetWidth
   canvas.height = targetHeight

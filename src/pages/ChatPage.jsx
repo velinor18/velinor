@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { downloadAvatarAsObjectUrl, revokeObjectUrl } from '../lib/avatar'
+import { downloadAvatarAsObjectUrl } from '../lib/avatar'
 import { normalizeAvatarShape } from '../lib/avatarShapes'
 
 const INITIAL_MESSAGES_LIMIT = 40
@@ -70,6 +70,8 @@ function MessageAvatar({ username, avatarUrl, avatarShape }) {
           src={avatarUrl}
           alt={username}
           className={`h-full w-full object-cover ${shapeClass}`}
+          loading="lazy"
+          decoding="async"
         />
       ) : (
         <span>{(username || 'U').slice(0, 1)}</span>
@@ -78,10 +80,9 @@ function MessageAvatar({ username, avatarUrl, avatarShape }) {
   )
 }
 
-function ChatMessageItem({ item, isOwn, profileInfo, avatarUrl }) {
-  const displayUsername = profileInfo?.username || item.username
-  const displayAvatarShape =
-    profileInfo?.avatar_shape ?? item.avatar_shape ?? 'circle'
+function ChatMessageItem({ item, isOwn, avatarUrl }) {
+  const displayUsername = item.username
+  const displayAvatarShape = item.avatar_shape ?? 'circle'
 
   return (
     <div className={`flex gap-3 ${isOwn ? 'justify-end' : 'justify-start'}`}>
@@ -133,7 +134,6 @@ export default function ChatPage({ user, profile }) {
   const [messageText, setMessageText] = useState('')
   const [sending, setSending] = useState(false)
   const [errorText, setErrorText] = useState('')
-  const [profileDirectory, setProfileDirectory] = useState({})
   const [avatarUrlDirectory, setAvatarUrlDirectory] = useState({})
   const [chatRestriction, setChatRestriction] = useState({
     isBlocked: false,
@@ -142,7 +142,7 @@ export default function ChatPage({ user, profile }) {
 
   const bottomRef = useRef(null)
   const chatViewportRef = useRef(null)
-  const avatarUrlDirectoryRef = useRef({})
+  const requestedAvatarPathsRef = useRef(new Set())
 
   useEffect(() => {
     setChatRestriction({
@@ -151,104 +151,51 @@ export default function ChatPage({ user, profile }) {
     })
   }, [profile?.chat_is_blocked, profile?.chat_blocked_until])
 
-  useEffect(() => {
-    avatarUrlDirectoryRef.current = avatarUrlDirectory
-  }, [avatarUrlDirectory])
-
-  useEffect(() => {
-    return () => {
-      const current = avatarUrlDirectoryRef.current
-      Object.values(current).forEach((url) => {
-        if (url) {
-          revokeObjectUrl(url)
-        }
-      })
-    }
-  }, [])
-
   const chatBlocked = isRestrictionActive(
     chatRestriction.isBlocked,
     chatRestriction.blockedUntil
   )
 
-  async function loadProfilesForUserIds(userIds) {
-    if (!supabase || !userIds?.length) return
+  async function loadAvatarUrlsForMessages(messageItems) {
+    const uniquePaths = [
+      ...new Set(
+        messageItems
+          .map((item) => item.avatar_path)
+          .filter(Boolean)
+          .filter((path) => !requestedAvatarPathsRef.current.has(path))
+      ),
+    ]
 
-    const uniqueIds = [...new Set(userIds.filter(Boolean))]
-    if (!uniqueIds.length) return
+    if (!uniquePaths.length) return
 
-    const { data, error } = await supabase.rpc('get_chat_profiles', {
-      p_user_ids: uniqueIds,
+    uniquePaths.forEach((path) => {
+      requestedAvatarPathsRef.current.add(path)
     })
 
-    if (error) {
-      console.error(error)
-      return
-    }
+    const results = await Promise.all(
+      uniquePaths.map(async (path) => {
+        const url = await downloadAvatarAsObjectUrl(path)
+        return {
+          path,
+          url,
+        }
+      })
+    )
 
-    const nextDirectory = {}
-    for (const row of data ?? []) {
-      nextDirectory[row.id] = {
-        id: row.id,
-        username: row.username,
-        avatar_path: row.avatar_path,
-        avatar_shape: row.avatar_shape,
-      }
-    }
+    setAvatarUrlDirectory((prev) => {
+      const next = { ...prev }
 
-    setProfileDirectory((prev) => ({
-      ...prev,
-      ...nextDirectory,
-    }))
+      results.forEach(({ path, url }) => {
+        if (url) {
+          next[path] = url
+        } else {
+          requestedAvatarPathsRef.current.delete(path)
+        }
+      })
+
+      return next
+    })
   }
-
-  useEffect(() => {
-    let isMounted = true
-
-    async function loadMissingAvatarUrls() {
-      const entries = Object.entries(profileDirectory)
-      if (!entries.length) return
-
-      for (const [userId, profileInfo] of entries) {
-        if (avatarUrlDirectoryRef.current[userId] !== undefined) continue
-
-        if (!profileInfo?.avatar_path) {
-          if (!isMounted) return
-          setAvatarUrlDirectory((prev) => {
-            if (prev[userId] !== undefined) return prev
-            const next = { ...prev, [userId]: '' }
-            avatarUrlDirectoryRef.current = next
-            return next
-          })
-          continue
-        }
-
-        const nextUrl = await downloadAvatarAsObjectUrl(profileInfo.avatar_path)
-
-        if (!isMounted) {
-          revokeObjectUrl(nextUrl)
-          return
-        }
-
-        setAvatarUrlDirectory((prev) => {
-          if (prev[userId] !== undefined) {
-            revokeObjectUrl(nextUrl)
-            return prev
-          }
-
-          const next = { ...prev, [userId]: nextUrl || '' }
-          avatarUrlDirectoryRef.current = next
-          return next
-        })
-      }
-    }
-
-    loadMissingAvatarUrls()
-
-    return () => {
-      isMounted = false
-    }
-  }, [profileDirectory])
 
   useEffect(() => {
     let isMounted = true
@@ -286,8 +233,7 @@ export default function ChatPage({ user, profile }) {
       setHasOlderMessages((data?.length ?? 0) === INITIAL_MESSAGES_LIMIT)
       setLoading(false)
 
-      const userIds = nextMessages.map((item) => item.user_id)
-      await loadProfilesForUserIds(userIds)
+      loadAvatarUrlsForMessages(nextMessages)
     }
 
     loadInitialMessages()
@@ -309,7 +255,7 @@ export default function ChatPage({ user, profile }) {
           schema: 'public',
           table: 'chat_messages',
         },
-        async (payload) => {
+        (payload) => {
           const nextItem = payload.new
 
           setMessages((prev) => {
@@ -320,7 +266,7 @@ export default function ChatPage({ user, profile }) {
             return [...prev, nextItem]
           })
 
-          await loadProfilesForUserIds([nextItem.user_id])
+          loadAvatarUrlsForMessages([nextItem])
         }
       )
       .subscribe()
@@ -370,9 +316,7 @@ export default function ChatPage({ user, profile }) {
 
     setMessages((prev) => [...olderMessages, ...prev])
     setHasOlderMessages((data?.length ?? 0) === OLDER_MESSAGES_LIMIT)
-
-    const userIds = olderMessages.map((item) => item.user_id)
-    await loadProfilesForUserIds(userIds)
+    loadAvatarUrlsForMessages(olderMessages)
 
     requestAnimationFrame(() => {
       if (chatViewportRef.current) {
@@ -501,8 +445,7 @@ export default function ChatPage({ user, profile }) {
                     key={item.id}
                     item={item}
                     isOwn={item.user_id === user.id}
-                    profileInfo={profileDirectory[item.user_id]}
-                    avatarUrl={avatarUrlDirectory[item.user_id] || ''}
+                    avatarUrl={item.avatar_path ? avatarUrlDirectory[item.avatar_path] || '' : ''}
                   />
                 ))
               )}
