@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { inspectReceiptImage, revokeReceiptPreviewUrl } from '../lib/receipt'
@@ -308,38 +308,74 @@ export default function HomePage({ user, profile }) {
     }
   }, [uploadedReceipt?.previewUrl])
 
-  function clearUploadedReceipt() {
+  const clearUploadedReceipt = useCallback(() => {
     setUploadedReceipt(null)
     setIsReceiptDragActive(false)
-  }
+  }, [])
 
-  function closePurchaseModal() {
+  const closePurchaseModal = useCallback(() => {
     setIsPurchaseModalOpen(false)
     clearUploadedReceipt()
-  }
+  }, [clearUploadedReceipt])
 
-  async function handleReceiptSelected(file) {
-    if (paymentBlocked) {
-      setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
-      return
+  const handleReceiptSelected = useCallback(
+    async (file) => {
+      if (paymentBlocked) {
+        setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
+        return
+      }
+
+      const result = await inspectReceiptImage(file)
+
+      if (!result.ok) {
+        setToast(result.error || 'Не удалось обработать изображение')
+        return
+      }
+
+      setUploadedReceipt({
+        file,
+        previewUrl: result.previewUrl,
+        width: result.width,
+        height: result.height,
+      })
+
+      setToast('Скриншот загружен')
+    },
+    [paymentBlocked, paymentBlockedUntilText]
+  )
+
+  useEffect(() => {
+    if (!isPurchaseModalOpen) return
+
+    const handlePaste = async (event) => {
+      const items = Array.from(event.clipboardData?.items || [])
+      const imageItem = items.find((item) => item.type.startsWith('image/'))
+
+      if (!imageItem) return
+
+      if (paymentBlocked) {
+        setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
+        return
+      }
+
+      const file = imageItem.getAsFile()
+      if (!file) return
+
+      event.preventDefault()
+      await handleReceiptSelected(file)
+      setToast('Скриншот заменён через Ctrl+V')
     }
 
-    const result = await inspectReceiptImage(file)
-
-    if (!result.ok) {
-      setToast(result.error || 'Не удалось обработать изображение')
-      return
+    window.addEventListener('paste', handlePaste)
+    return () => {
+      window.removeEventListener('paste', handlePaste)
     }
-
-    setUploadedReceipt({
-      file,
-      previewUrl: result.previewUrl,
-      width: result.width,
-      height: result.height,
-    })
-
-    setToast('Скриншот загружен')
-  }
+  }, [
+    isPurchaseModalOpen,
+    paymentBlocked,
+    paymentBlockedUntilText,
+    handleReceiptSelected,
+  ])
 
   async function loadPublicStats() {
     if (!supabase) {
@@ -893,61 +929,63 @@ export default function HomePage({ user, profile }) {
           <div>
             <div className="mb-4 text-2xl font-black">Загрузите скриншот оплаты</div>
 
-            <label
-              onDragOver={(event) => {
-                event.preventDefault()
-                if (paymentBlocked) return
-                setIsReceiptDragActive(true)
-              }}
-              onDragLeave={(event) => {
-                event.preventDefault()
-                setIsReceiptDragActive(false)
-              }}
-              onDrop={async (event) => {
-                event.preventDefault()
-                setIsReceiptDragActive(false)
+            {!uploadedReceipt ? (
+              <label
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  if (paymentBlocked) return
+                  setIsReceiptDragActive(true)
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault()
+                  setIsReceiptDragActive(false)
+                }}
+                onDrop={async (event) => {
+                  event.preventDefault()
+                  setIsReceiptDragActive(false)
 
-                if (paymentBlocked) {
-                  setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
-                  return
-                }
+                  if (paymentBlocked) {
+                    setToast(`Покупки временно недоступны до ${paymentBlockedUntilText}`)
+                    return
+                  }
 
-                const file = event.dataTransfer?.files?.[0]
-                if (!file) return
+                  const file = event.dataTransfer?.files?.[0]
+                  if (!file) return
 
-                await handleReceiptSelected(file)
-              }}
-              className={`flex min-h-[200px] flex-col items-center justify-center rounded-[24px] border-2 border-dashed p-6 text-center transition ${
-                paymentBlocked
-                  ? 'cursor-not-allowed border-fuchsia-600/30 bg-fuchsia-900/5 opacity-60'
-                  : isReceiptDragActive
-                    ? 'cursor-pointer border-fuchsia-400 bg-fuchsia-900/20'
-                    : 'cursor-pointer border-fuchsia-600/50 bg-fuchsia-900/10 hover:bg-fuchsia-900/15'
-              }`}
-            >
-              <div className="text-5xl text-fuchsia-500">⇧</div>
-              <div className="mt-5 max-w-md text-2xl text-zinc-300">
-                Перетащите сюда скриншот или нажмите для выбора
-              </div>
-              <div className="mt-3 text-sm text-zinc-500">
-                После выбора изображение сразу появится ниже
-              </div>
+                  await handleReceiptSelected(file)
+                }}
+                className={`flex min-h-[200px] flex-col items-center justify-center rounded-[24px] border-2 border-dashed p-6 text-center transition ${
+                  paymentBlocked
+                    ? 'cursor-not-allowed border-fuchsia-600/30 bg-fuchsia-900/5 opacity-60'
+                    : isReceiptDragActive
+                      ? 'cursor-pointer border-fuchsia-400 bg-fuchsia-900/20'
+                      : 'cursor-pointer border-fuchsia-600/50 bg-fuchsia-900/10 hover:bg-fuchsia-900/15'
+                }`}
+              >
+                <div className="text-5xl text-fuchsia-500">⇧</div>
+                <div className="mt-5 max-w-md text-2xl text-zinc-300">
+                  Перетащите сюда скриншот или нажмите для выбора
+                </div>
+                <div className="mt-3 text-sm text-zinc-500">
+                  После выбора блок загрузки исчезнет
+                </div>
 
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="hidden"
-                disabled={paymentBlocked}
-                onChange={handleFileChange}
-              />
-            </label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  disabled={paymentBlocked}
+                  onChange={handleFileChange}
+                />
+              </label>
+            ) : null}
 
             {uploadedReceipt ? (
-              <div className="mt-5 rounded-[24px] border border-fuchsia-500/20 bg-white/[0.02] p-4 sm:p-5">
+              <div className="rounded-[24px] border border-fuchsia-500/20 bg-white/[0.02] p-4 sm:p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-lg font-black text-white">
-                      Предпросмотр загруженного изображения
+                      Загруженное изображение
                     </div>
                     <div className="mt-1 break-all text-sm text-zinc-400">
                       {uploadedReceipt.file.name}
@@ -977,6 +1015,10 @@ export default function HomePage({ user, profile }) {
                     Разрешение: {uploadedReceipt.width} × {uploadedReceipt.height}
                   </div>
                   <div>Формат: {uploadedReceipt.file.type || 'image/*'}</div>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-fuchsia-500/15 bg-black/30 px-4 py-3 text-sm text-zinc-400">
+                  Чтобы заменить изображение, удалите текущее или вставьте новое через Ctrl+V.
                 </div>
               </div>
             ) : null}
