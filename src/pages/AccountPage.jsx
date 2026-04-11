@@ -230,31 +230,19 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
   useEffect(() => {
     if (!avatarMessage) return
-
-    const timer = setTimeout(() => {
-      setAvatarMessage('')
-    }, 2600)
-
+    const timer = setTimeout(() => setAvatarMessage(''), 2600)
     return () => clearTimeout(timer)
   }, [avatarMessage])
 
   useEffect(() => {
     if (!avatarError) return
-
-    const timer = setTimeout(() => {
-      setAvatarError('')
-    }, 3200)
-
+    const timer = setTimeout(() => setAvatarError(''), 3200)
     return () => clearTimeout(timer)
   }, [avatarError])
 
   useEffect(() => {
     if (!telegramMessage) return
-
-    const timer = setTimeout(() => {
-      setTelegramMessage('')
-    }, 3200)
-
+    const timer = setTimeout(() => setTelegramMessage(''), 3200)
     return () => clearTimeout(timer)
   }, [telegramMessage])
 
@@ -371,8 +359,10 @@ export default function AccountPage({ user, profile, profileLoading }) {
       .order('created_at', { ascending: false })
       .limit(1)
 
-    const [{ data: profileData, error: profileError }, { data: codeData, error: codeError }] =
-      await Promise.all([profileRequest, codeRequest])
+    const [
+      { data: profileData, error: profileError },
+      { data: codeData, error: codeError },
+    ] = await Promise.all([profileRequest, codeRequest])
 
     if (profileError) {
       console.error(profileError)
@@ -427,13 +417,14 @@ export default function AccountPage({ user, profile, profileLoading }) {
     ? new Date(profileView.blocked_until).toLocaleString('ru-RU')
     : '—'
 
-  const linkedTelegramLabel = profileLoading || telegramSectionLoading
-    ? 'Загрузка...'
-    : profileView?.telegram_username
-      ? `@${profileView.telegram_username}`
-      : profileView?.telegram_user_id
-        ? 'Telegram привязан'
-        : 'Не подключён'
+  const linkedTelegramLabel =
+    profileLoading || telegramSectionLoading
+      ? 'Загрузка...'
+      : profileView?.telegram_username
+        ? `@${profileView.telegram_username}`
+        : profileView?.telegram_user_id
+          ? 'Telegram привязан'
+          : 'Не подключён'
 
   const telegramLinkedAtText = profileView?.telegram_linked_at
     ? new Date(profileView.telegram_linked_at).toLocaleString('ru-RU')
@@ -445,11 +436,9 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
   const avatarShape = normalizeAvatarShape(profileView?.avatar_shape)
 
-  const openTelegramBot = () => {
-    const url = activeTelegramCode?.code
-      ? buildTelegramBotStartUrl(activeTelegramCode.code)
-      : buildTelegramBotUrl()
-
+  const openTelegramBot = (codeOverride = '') => {
+    const code = codeOverride || activeTelegramCode?.code || ''
+    const url = code ? buildTelegramBotStartUrl(code) : buildTelegramBotUrl()
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
@@ -577,13 +566,16 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return
     }
 
-    setActiveTelegramCode({
+    const nextCodeState = {
       code: nextRow.code,
       expires_at: nextRow.expires_at,
       created_at: new Date().toISOString(),
-    })
+    }
+
+    setActiveTelegramCode(nextCodeState)
     setTelegramMessage('Код привязки создан. Теперь откройте бота.')
-    openTelegramBot()
+
+    openTelegramBot(nextRow.code)
   }
 
   async function handleCopyTelegramCode() {
@@ -611,10 +603,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return
     }
 
-    const confirmed = window.confirm(
-      'Отвязать Telegram от этого аккаунта?'
-    )
-
+    const confirmed = window.confirm('Отвязать Telegram от этого аккаунта?')
     if (!confirmed) return
 
     setTelegramActionLoading(true)
@@ -810,7 +799,10 @@ export default function AccountPage({ user, profile, profileLoading }) {
                       Telegram привязан
                     </div>
                     <div className="mt-3 text-sm leading-6 text-zinc-400">
-                      Username: {profileView.telegram_username ? `@${profileView.telegram_username}` : 'не указан'}
+                      Username:{' '}
+                      {profileView.telegram_username
+                        ? `@${profileView.telegram_username}`
+                        : 'не указан'}
                     </div>
                     <div className="mt-2 text-sm leading-6 text-zinc-400">
                       Дата привязки: {telegramLinkedAtText}
@@ -831,7 +823,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
                 <div className="grid gap-3 sm:grid-cols-4">
                   <button
                     type="button"
-                    onClick={openTelegramBot}
+                    onClick={() => openTelegramBot()}
                     className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
                   >
                     Открыть бота
@@ -919,7 +911,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
                   <button
                     type="button"
-                    onClick={openTelegramBot}
+                    onClick={() => openTelegramBot()}
                     className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
                   >
                     Открыть бота
@@ -953,7 +945,9 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
                   <button
                     type="button"
-                    onClick={() => window.open(buildTelegramBotUrl(), '_blank', 'noopener,noreferrer')}
+                    onClick={() =>
+                      window.open(buildTelegramBotUrl(), '_blank', 'noopener,noreferrer')
+                    }
                     className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
                   >
                     Открыть бота без кода
