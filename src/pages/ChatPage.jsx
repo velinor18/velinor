@@ -91,14 +91,20 @@ function MessageAvatar({ username, avatarPath, avatarShape }) {
   )
 }
 
-function ChatMessageItem({ item, isOwn }) {
+function ChatMessageItem({ item, isOwn, profileInfo }) {
+  const displayUsername = profileInfo?.username || item.username
+  const displayAvatarPath =
+    profileInfo?.avatar_path ?? item.avatar_path ?? null
+  const displayAvatarShape =
+    profileInfo?.avatar_shape ?? item.avatar_shape ?? 'circle'
+
   return (
     <div className={`flex gap-3 ${isOwn ? 'justify-end' : 'justify-start'}`}>
       {!isOwn ? (
         <MessageAvatar
-          username={item.username}
-          avatarPath={item.avatar_path}
-          avatarShape={item.avatar_shape}
+          username={displayUsername}
+          avatarPath={displayAvatarPath}
+          avatarShape={displayAvatarShape}
         />
       ) : null}
 
@@ -111,7 +117,7 @@ function ChatMessageItem({ item, isOwn }) {
       >
         <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
           <div className="break-all text-sm font-black text-white">
-            {item.username}
+            {displayUsername}
           </div>
           <div className="text-xs text-zinc-500">
             {formatMessageTime(item.created_at)}
@@ -125,9 +131,9 @@ function ChatMessageItem({ item, isOwn }) {
 
       {isOwn ? (
         <MessageAvatar
-          username={item.username}
-          avatarPath={item.avatar_path}
-          avatarShape={item.avatar_shape}
+          username={displayUsername}
+          avatarPath={displayAvatarPath}
+          avatarShape={displayAvatarShape}
         />
       ) : null}
     </div>
@@ -140,6 +146,7 @@ export default function ChatPage({ user, profile }) {
   const [messageText, setMessageText] = useState('')
   const [sending, setSending] = useState(false)
   const [errorText, setErrorText] = useState('')
+  const [profileDirectory, setProfileDirectory] = useState({})
 
   const bottomRef = useRef(null)
 
@@ -151,6 +158,37 @@ export default function ChatPage({ user, profile }) {
 
   const senderAvatarPath = profile?.avatar_path ?? null
   const senderAvatarShape = profile?.avatar_shape ?? 'circle'
+
+  async function loadProfilesForUserIds(userIds) {
+    if (!supabase || !userIds?.length) return
+
+    const uniqueIds = [...new Set(userIds.filter(Boolean))]
+    if (!uniqueIds.length) return
+
+    const { data, error } = await supabase.rpc('get_chat_profiles', {
+      p_user_ids: uniqueIds,
+    })
+
+    if (error) {
+      console.error(error)
+      return
+    }
+
+    const nextDirectory = {}
+    for (const row of data ?? []) {
+      nextDirectory[row.id] = {
+        id: row.id,
+        username: row.username,
+        avatar_path: row.avatar_path,
+        avatar_shape: row.avatar_shape,
+      }
+    }
+
+    setProfileDirectory((prev) => ({
+      ...prev,
+      ...nextDirectory,
+    }))
+  }
 
   useEffect(() => {
     let isMounted = true
@@ -171,8 +209,7 @@ export default function ChatPage({ user, profile }) {
         .select(
           'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
         )
-        .order('created_at', { ascending: false })
-        .limit(100)
+        .order('created_at', { ascending: true })
 
       if (!isMounted) return
 
@@ -183,8 +220,12 @@ export default function ChatPage({ user, profile }) {
         return
       }
 
-      setMessages([...(data ?? [])].reverse())
+      const nextMessages = data ?? []
+      setMessages(nextMessages)
       setLoading(false)
+
+      const userIds = nextMessages.map((item) => item.user_id)
+      await loadProfilesForUserIds(userIds)
     }
 
     loadMessages()
@@ -206,7 +247,7 @@ export default function ChatPage({ user, profile }) {
           schema: 'public',
           table: 'chat_messages',
         },
-        (payload) => {
+        async (payload) => {
           const nextItem = payload.new
 
           setMessages((prev) => {
@@ -214,9 +255,10 @@ export default function ChatPage({ user, profile }) {
               return prev
             }
 
-            const next = [...prev, nextItem]
-            return next.length > 100 ? next.slice(next.length - 100) : next
+            return [...prev, nextItem]
           })
+
+          await loadProfilesForUserIds([nextItem.user_id])
         }
       )
       .subscribe()
@@ -331,6 +373,7 @@ export default function ChatPage({ user, profile }) {
                   key={item.id}
                   item={item}
                   isOwn={item.user_id === user.id}
+                  profileInfo={profileDirectory[item.user_id]}
                 />
               ))}
               <div ref={bottomRef} />
