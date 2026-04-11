@@ -191,6 +191,100 @@ function ViolationDetailsModal({ item, onClose }) {
   )
 }
 
+function TelegramStatusCard({
+  linkedLabel,
+  linkedAtText,
+  telegramUsername,
+  loading,
+  actionLoading,
+  onRefresh,
+  onLink,
+  onOpenBot,
+  onCopyUsername,
+  onUnlink,
+}) {
+  const isLinked = Boolean(telegramUsername) || linkedLabel === 'Telegram привязан'
+
+  return (
+    <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm uppercase tracking-wide text-zinc-500">
+            Telegram
+          </div>
+          <div className="mt-3 text-xl font-black text-white sm:text-2xl">
+            {linkedLabel}
+          </div>
+          {telegramUsername ? (
+            <div className="mt-2 text-sm text-zinc-400">
+              Username: @{telegramUsername}
+            </div>
+          ) : null}
+          {isLinked && linkedAtText !== '—' ? (
+            <div className="mt-2 text-sm text-zinc-400">
+              Дата привязки: {linkedAtText}
+            </div>
+          ) : null}
+        </div>
+
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading || actionLoading}
+          className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+        >
+          Обновить
+        </button>
+      </div>
+
+      {isLinked ? (
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <button
+            type="button"
+            onClick={onOpenBot}
+            className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
+          >
+            Открыть бота
+          </button>
+
+          <button
+            type="button"
+            onClick={onCopyUsername}
+            className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+          >
+            Скопировать username
+          </button>
+
+          <button
+            type="button"
+            onClick={onUnlink}
+            disabled={actionLoading}
+            className="rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
+          >
+            {actionLoading ? 'Отвязываем...' : 'Отвязать'}
+          </button>
+        </div>
+      ) : (
+        <div className="mt-5">
+          <div className="text-sm leading-6 text-zinc-400">
+            Нажмите кнопку ниже. Сайт сам создаст одноразовый код и сразу откроет
+            Telegram-бота для завершения привязки.
+          </div>
+
+          <button
+            type="button"
+            onClick={onLink}
+            disabled={actionLoading}
+            className="mt-4 w-full rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
+          >
+            {actionLoading ? 'Создаём код...' : 'Привязать Telegram'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AccountPage({ user, profile, profileLoading }) {
   const navigate = useNavigate()
   const avatarUrlRef = useRef('')
@@ -430,10 +524,6 @@ export default function AccountPage({ user, profile, profileLoading }) {
     ? new Date(profileView.telegram_linked_at).toLocaleString('ru-RU')
     : '—'
 
-  const telegramCodeExpiresText = activeTelegramCode?.expires_at
-    ? new Date(activeTelegramCode.expires_at).toLocaleString('ru-RU')
-    : '—'
-
   const avatarShape = normalizeAvatarShape(profileView?.avatar_shape)
 
   const openTelegramBot = (codeOverride = '') => {
@@ -444,7 +534,6 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
   async function handleSignOut() {
     if (!supabase) return
-
     await supabase.auth.signOut()
     navigate('/')
   }
@@ -566,28 +655,14 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return
     }
 
-    const nextCodeState = {
+    setActiveTelegramCode({
       code: nextRow.code,
       expires_at: nextRow.expires_at,
       created_at: new Date().toISOString(),
-    }
+    })
 
-    setActiveTelegramCode(nextCodeState)
-    setTelegramMessage('Код привязки создан. Теперь откройте бота.')
-
+    setTelegramMessage('Код создан. Открываем Telegram-бота...')
     openTelegramBot(nextRow.code)
-  }
-
-  async function handleCopyTelegramCode() {
-    if (!activeTelegramCode?.code) {
-      setTelegramMessage('Сначала создайте код привязки')
-      return
-    }
-
-    const success = await copyText(activeTelegramCode.code)
-    setTelegramMessage(
-      success ? 'Код привязки скопирован' : 'Не удалось скопировать код'
-    )
   }
 
   async function handleCopyTelegramUsername() {
@@ -735,6 +810,12 @@ export default function AccountPage({ user, profile, profileLoading }) {
             </div>
           ) : null}
 
+          {telegramMessage ? (
+            <div className="mt-6 rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+              {telegramMessage}
+            </div>
+          ) : null}
+
           {!isAdmin && profileView?.is_blocked ? (
             <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm leading-6 text-red-200">
               Аккаунт сейчас заблокирован.
@@ -749,13 +830,18 @@ export default function AccountPage({ user, profile, profileLoading }) {
               value={profileLoading ? 'Загрузка...' : profileView?.username ?? '—'}
             />
 
-            <InfoCard label="Telegram" value={linkedTelegramLabel} />
-
-            {profileView?.telegram_user_id ? (
-              <InfoCard label="Привязан" value={telegramLinkedAtText} />
-            ) : (
-              <InfoCard label="Код привязки" value={activeTelegramCode?.code ?? '—'} />
-            )}
+            <TelegramStatusCard
+              linkedLabel={linkedTelegramLabel}
+              linkedAtText={profileView?.telegram_user_id ? telegramLinkedAtText : '—'}
+              telegramUsername={profileView?.telegram_username ?? ''}
+              loading={telegramSectionLoading}
+              actionLoading={telegramActionLoading}
+              onRefresh={handleRefreshTelegram}
+              onLink={handleCreateTelegramCode}
+              onOpenBot={() => openTelegramBot()}
+              onCopyUsername={handleCopyTelegramUsername}
+              onUnlink={handleUnlinkTelegram}
+            />
 
             {isAdmin ? (
               <InfoCard
@@ -764,197 +850,6 @@ export default function AccountPage({ user, profile, profileLoading }) {
                 valueClassName="text-lg font-semibold text-zinc-200"
               />
             ) : null}
-          </div>
-
-          <div className="mt-8 rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-3xl font-black">Привязка Telegram</h2>
-                <p className="mt-3 max-w-3xl text-zinc-400">
-                  Сайт создаёт одноразовый код привязки. После этого открывается бот,
-                  который получает код через /start и связывает ваш Telegram с
-                  аккаунтом сайта.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-fuchsia-500/15 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
-                Бот: @{TELEGRAM_BOT_USERNAME}
-              </div>
-            </div>
-
-            {telegramMessage ? (
-              <div className="mt-5 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-                {telegramMessage}
-              </div>
-            ) : null}
-
-            {profileView?.telegram_user_id ? (
-              <div className="mt-6 space-y-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="rounded-[24px] border border-fuchsia-500/10 bg-white/[0.02] p-5">
-                    <div className="text-sm uppercase tracking-wide text-zinc-500">
-                      Статус
-                    </div>
-                    <div className="mt-3 text-2xl font-black text-white">
-                      Telegram привязан
-                    </div>
-                    <div className="mt-3 text-sm leading-6 text-zinc-400">
-                      Username:{' '}
-                      {profileView.telegram_username
-                        ? `@${profileView.telegram_username}`
-                        : 'не указан'}
-                    </div>
-                    <div className="mt-2 text-sm leading-6 text-zinc-400">
-                      Дата привязки: {telegramLinkedAtText}
-                    </div>
-                  </div>
-
-                  <div className="rounded-[24px] border border-fuchsia-500/10 bg-white/[0.02] p-5">
-                    <div className="text-sm uppercase tracking-wide text-zinc-500">
-                      Что дальше
-                    </div>
-                    <div className="mt-3 text-base leading-7 text-zinc-300">
-                      Теперь этот бот можно использовать для уведомлений, получения
-                      цифровых товаров и будущих действий, которые мы добавим в следующих этапах.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-4">
-                  <button
-                    type="button"
-                    onClick={() => openTelegramBot()}
-                    className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
-                  >
-                    Открыть бота
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleCopyTelegramUsername}
-                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                  >
-                    Скопировать username
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleRefreshTelegram}
-                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                  >
-                    Обновить статус
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleUnlinkTelegram}
-                    disabled={telegramActionLoading}
-                    className="rounded-2xl border border-red-500/20 bg-red-500/10 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
-                  >
-                    {telegramActionLoading ? 'Отвязываем...' : 'Отвязать Telegram'}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-6 space-y-4">
-                <div className="rounded-[24px] border border-fuchsia-500/10 bg-white/[0.02] p-5">
-                  <div className="text-sm uppercase tracking-wide text-zinc-500">
-                    Как привязать Telegram
-                  </div>
-                  <div className="mt-3 space-y-2 text-base leading-7 text-zinc-300">
-                    <div>1. Создайте одноразовый код привязки.</div>
-                    <div>2. Откройте бота по кнопке ниже.</div>
-                    <div>3. Нажмите Start в Telegram.</div>
-                    <div>4. Вернитесь сюда. Статус обновится автоматически или по кнопке.</div>
-                  </div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="rounded-[24px] border border-fuchsia-500/10 bg-white/[0.02] p-5">
-                    <div className="text-sm uppercase tracking-wide text-zinc-500">
-                      Активный код
-                    </div>
-                    <div className="mt-3 break-all text-2xl font-black text-white">
-                      {activeTelegramCode?.code ?? 'Код ещё не создан'}
-                    </div>
-                    <div className="mt-3 text-sm leading-6 text-zinc-400">
-                      Бот использует этот код только один раз.
-                    </div>
-                  </div>
-
-                  <div className="rounded-[24px] border border-fuchsia-500/10 bg-white/[0.02] p-5">
-                    <div className="text-sm uppercase tracking-wide text-zinc-500">
-                      Действует до
-                    </div>
-                    <div className="mt-3 text-xl font-black text-white">
-                      {telegramCodeExpiresText}
-                    </div>
-                    <div className="mt-3 text-sm leading-6 text-zinc-400">
-                      Если код истёк, просто создайте новый.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-4">
-                  <button
-                    type="button"
-                    onClick={handleCreateTelegramCode}
-                    disabled={telegramActionLoading}
-                    className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
-                  >
-                    {telegramActionLoading
-                      ? 'Создаём...'
-                      : activeTelegramCode?.code
-                        ? 'Создать новый код'
-                        : 'Создать код'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => openTelegramBot()}
-                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                  >
-                    Открыть бота
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleCopyTelegramCode}
-                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                  >
-                    Скопировать код
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleRefreshTelegram}
-                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                  >
-                    Обновить статус
-                  </button>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={handleCopyTelegramUsername}
-                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                  >
-                    Скопировать username бота
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      window.open(buildTelegramBotUrl(), '_blank', 'noopener,noreferrer')
-                    }
-                    className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                  >
-                    Открыть бота без кода
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="mt-8 grid gap-5 lg:grid-cols-2">
