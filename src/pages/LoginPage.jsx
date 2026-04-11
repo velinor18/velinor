@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { isValidUsername, usernameToEmail } from '../lib/auth'
-import { signInWithGoogle } from '../lib/socialAuth'
+import {
+  clearGoogleOAuthPending,
+  hasPendingGoogleOAuth,
+  markGoogleOAuthPending,
+  signInWithGoogle,
+} from '../lib/socialAuth'
 
 function SocialButton({ children, onClick, disabled }) {
   return (
@@ -24,17 +29,97 @@ export default function LoginPage({ user }) {
   const [password, setPassword] = useState('')
   const [errorText, setErrorText] = useState('')
   const [loading, setLoading] = useState(false)
-  const [googleLoading, setGoogleLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(hasPendingGoogleOAuth())
+
+  const resetGoogleButtonState = useCallback(async () => {
+    if (!hasPendingGoogleOAuth()) {
+      setGoogleLoading(false)
+      return
+    }
+
+    if (document.visibilityState === 'hidden') {
+      return
+    }
+
+    if (!supabase) {
+      clearGoogleOAuthPending()
+      setGoogleLoading(false)
+      return
+    }
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      if (session?.user) {
+        clearGoogleOAuthPending()
+        setGoogleLoading(false)
+        return
+      }
+    } catch {
+      // ignore
+    }
+
+    clearGoogleOAuthPending()
+    setGoogleLoading(false)
+  }, [])
 
   useEffect(() => {
     if (user) {
+      clearGoogleOAuthPending()
+      setGoogleLoading(false)
       navigate('/profile')
     }
   }, [user, navigate])
 
+  useEffect(() => {
+    let timeoutId = null
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        timeoutId = window.setTimeout(() => {
+          resetGoogleButtonState()
+        }, 250)
+      }
+    }
+
+    const handleWindowFocus = () => {
+      timeoutId = window.setTimeout(() => {
+        resetGoogleButtonState()
+      }, 250)
+    }
+
+    const handlePageShow = () => {
+      timeoutId = window.setTimeout(() => {
+        resetGoogleButtonState()
+      }, 250)
+    }
+
+    window.addEventListener('focus', handleWindowFocus)
+    window.addEventListener('pageshow', handlePageShow)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    timeoutId = window.setTimeout(() => {
+      resetGoogleButtonState()
+    }, 250)
+
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus)
+      window.removeEventListener('pageshow', handlePageShow)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+
+      if (timeoutId) {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [resetGoogleButtonState])
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setErrorText('')
+    clearGoogleOAuthPending()
+    setGoogleLoading(false)
 
     if (!supabase) {
       setErrorText('Supabase не подключён')
@@ -73,13 +158,15 @@ export default function LoginPage({ user }) {
   const handleGoogleLogin = async () => {
     setErrorText('')
     setGoogleLoading(true)
+    markGoogleOAuthPending()
 
     const { error } = await signInWithGoogle()
 
     if (error) {
       console.error(error)
-      setErrorText('Не удалось запустить вход через Google')
+      clearGoogleOAuthPending()
       setGoogleLoading(false)
+      setErrorText('Не удалось запустить вход через Google')
     }
   }
 
