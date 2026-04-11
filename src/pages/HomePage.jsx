@@ -340,6 +340,8 @@ export default function HomePage({ user, profile }) {
         return
       }
 
+      const hadPreviousReceipt = Boolean(receiptPreviewUrlRef.current)
+
       const result = await inspectReceiptImage(file)
 
       if (!result.ok) {
@@ -355,10 +357,13 @@ export default function HomePage({ user, profile }) {
         previewKey: `${Date.now()}_${Math.random()}`,
       })
 
-      if (mode === 'paste') {
-        setToast('Скриншот заменён через Ctrl+V')
-      } else {
+      if (mode === 'select') {
         setToast('Скриншот загружен')
+        return
+      }
+
+      if (mode === 'paste' && hadPreviousReceipt) {
+        setToast('Скриншот заменён через Ctrl+V')
       }
     },
     [paymentBlocked, paymentBlockedUntilText, replaceUploadedReceipt]
@@ -810,7 +815,7 @@ export default function HomePage({ user, profile }) {
 
         <footer className="mt-10 flex flex-col items-center justify-between gap-6 border-t border-fuchsia-500/15 py-10 text-zinc-400 sm:flex-row">
           <div className="flex items-center gap-3 text-xl font-bold text-fuchsia-500">
-            ✦ velinor
+            ✦ velinор
           </div>
           <div>© 2026 velinor. Все права защищены.</div>
         </footer>
