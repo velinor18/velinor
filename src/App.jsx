@@ -9,10 +9,27 @@ import RegisterPage from './pages/RegisterPage'
 import AccountPage from './pages/AccountPage'
 import RequestsPage from './pages/RequestsPage'
 import RulesPage from './pages/RulesPage'
+import ChatPage from './pages/ChatPage'
 import { supabase } from './lib/supabase'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const PROFILE_SELECT_QUERY = `
+  id,
+  username,
+  role,
+  created_at,
+  avatar_path,
+  avatar_shape,
+  hearts_left,
+  strikes_count,
+  is_blocked,
+  blocked_until,
+  telegram_user_id,
+  telegram_username,
+  telegram_linked_at
+`
 
 function getProfileCacheKey(userId) {
   return `${PROFILE_CACHE_PREFIX}${userId}`
@@ -27,9 +44,9 @@ function readCachedProfile(userId) {
   }
 }
 
-function writeCachedProfile(userId, profile) {
+function writeCachedProfile(userId, nextProfile) {
   try {
-    localStorage.setItem(getProfileCacheKey(userId), JSON.stringify(profile))
+    localStorage.setItem(getProfileCacheKey(userId), JSON.stringify(nextProfile))
   } catch {
     // ignore cache write errors
   }
@@ -42,21 +59,6 @@ function clearCachedProfile(userId) {
     // ignore
   }
 }
-
-const PROFILE_SELECT_QUERY = `
-  id,
-  username,
-  role,
-  created_at,
-  avatar_path,
-  avatar_shape,
-  hearts_left,
-  strikes_count,
-  is_blocked,
-  blocked_until,
-  telegram_user_id,
-  telegram_username
-`
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -191,8 +193,6 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage user={user} profile={profile} />} />
 
-        <Route path="/rules" element={<RulesPage />} />
-
         <Route
           path="/login"
           element={<LoginPage user={user} authLoading={authLoading} />}
@@ -202,6 +202,10 @@ export default function App() {
           path="/register"
           element={<RegisterPage user={user} authLoading={authLoading} />}
         />
+
+        <Route path="/rules" element={<RulesPage />} />
+
+        <Route path="/account" element={<Navigate to="/profile" replace />} />
 
         <Route
           path="/profile"
@@ -216,7 +220,14 @@ export default function App() {
           }
         />
 
-        <Route path="/account" element={<Navigate to="/profile" replace />} />
+        <Route
+          path="/chat"
+          element={
+            <ProtectedRoute user={user} authLoading={authLoading}>
+              <ChatPage user={user} profile={profile} />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/requests"

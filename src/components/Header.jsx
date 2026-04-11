@@ -109,6 +109,12 @@ export default function Header({ user, profile, authLoading }) {
               Правила
             </NavLink>
 
+            {!authLoading && user && (
+              <NavLink to="/chat" className={linkClass}>
+                Чат
+              </NavLink>
+            )}
+
             <button onClick={() => goToHomeSection('support')} className={plainButtonClass}>
               Поддержка
             </button>
@@ -198,6 +204,16 @@ export default function Header({ user, profile, authLoading }) {
               >
                 Правила
               </NavLink>
+
+              {!authLoading && user && (
+                <NavLink
+                  to="/chat"
+                  onClick={closeMobileMenu}
+                  className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                >
+                  Чат
+                </NavLink>
+              )}
 
               <button
                 onClick={() => goToHomeSection('support')}
