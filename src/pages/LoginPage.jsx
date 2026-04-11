@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { isValidUsername, usernameToEmail } from '../lib/auth'
-import { signInWithGoogle } from '../lib/socialAuth'
+import { signInWithGoogle, signInWithVk } from '../lib/socialAuth'
 
 function SocialButton({ children, onClick, disabled }) {
   return (
@@ -25,6 +25,7 @@ export default function LoginPage({ user }) {
   const [errorText, setErrorText] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+  const [vkLoading, setVkLoading] = useState(false)
 
   useEffect(() => {
     if (user) {
@@ -83,19 +84,36 @@ export default function LoginPage({ user }) {
     }
   }
 
-  const anyLoading = loading || googleLoading
+  const handleVkLogin = async () => {
+    setErrorText('')
+    setVkLoading(true)
+
+    const { error } = await signInWithVk()
+
+    if (error) {
+      console.error(error)
+      setErrorText('Не удалось запустить вход через VK')
+      setVkLoading(false)
+    }
+  }
+
+  const anyLoading = loading || googleLoading || vkLoading
 
   return (
     <div className="mx-auto max-w-xl px-4 py-16 sm:px-6 lg:px-8">
       <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">
         <h1 className="text-4xl font-black">Вход</h1>
         <p className="mt-3 text-zinc-400">
-          Можно войти через логин и пароль или сразу через Google.
+          Можно войти через логин и пароль, через Google или через VK.
         </p>
 
-        <div className="mt-8">
+        <div className="mt-8 grid gap-3">
           <SocialButton onClick={handleGoogleLogin} disabled={anyLoading}>
             {googleLoading ? 'Переходим в Google...' : 'Войти через Google'}
+          </SocialButton>
+
+          <SocialButton onClick={handleVkLogin} disabled={anyLoading}>
+            {vkLoading ? 'Переходим в VK...' : 'Войти через VK'}
           </SocialButton>
         </div>
 
