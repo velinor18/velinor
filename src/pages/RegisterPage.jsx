@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { isValidUsername, usernameToEmail } from '../lib/auth'
-import { signInWithGoogle, signInWithVk } from '../lib/socialAuth'
+import { signInWithGoogle } from '../lib/socialAuth'
 
 function SocialButton({ children, onClick, disabled }) {
   return (
@@ -26,7 +26,6 @@ export default function RegisterPage({ user }) {
   const [errorText, setErrorText] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
-  const [vkLoading, setVkLoading] = useState(false)
 
   useEffect(() => {
     if (user) {
@@ -100,40 +99,21 @@ export default function RegisterPage({ user }) {
     }
   }
 
-  const handleVkRegister = async () => {
-    setErrorText('')
-    setVkLoading(true)
-
-    const { error } = await signInWithVk()
-
-    if (error) {
-      console.error(error)
-      setErrorText('Не удалось запустить вход через VK')
-      setVkLoading(false)
-    }
-  }
-
-  const anyLoading = loading || googleLoading || vkLoading
+  const anyLoading = loading || googleLoading
 
   return (
     <div className="mx-auto max-w-xl px-4 py-16 sm:px-6 lg:px-8">
       <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">
         <h1 className="text-4xl font-black">Регистрация</h1>
         <p className="mt-3 text-zinc-400">
-          Можно создать аккаунт через логин и пароль, через Google или через VK.
+          Можно создать аккаунт через логин и пароль или сразу через Google.
         </p>
 
-        <div className="mt-8 grid gap-3">
+        <div className="mt-8">
           <SocialButton onClick={handleGoogleRegister} disabled={anyLoading}>
             {googleLoading
               ? 'Переходим в Google...'
               : 'Зарегистрироваться через Google'}
-          </SocialButton>
-
-          <SocialButton onClick={handleVkRegister} disabled={anyLoading}>
-            {vkLoading
-              ? 'Переходим в VK...'
-              : 'Зарегистрироваться через VK'}
           </SocialButton>
         </div>
 
