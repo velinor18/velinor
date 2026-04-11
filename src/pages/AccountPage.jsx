@@ -15,6 +15,8 @@ import {
 } from '../lib/violations'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
+const TELEGRAM_BOT_USERNAME = 'VelynoriusBot'
+const TELEGRAM_BOT_LINK = `https://t.me/${TELEGRAM_BOT_USERNAME}`
 
 const PROFILE_SELECT_QUERY = `
   id,
@@ -40,6 +42,42 @@ function writeCachedProfile(userId, nextProfile) {
   } catch {
     // ignore cache write errors
   }
+}
+
+function fallbackCopyText(text) {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  let success = false
+  try {
+    success = document.execCommand('copy')
+  } catch {
+    success = false
+  }
+
+  document.body.removeChild(textarea)
+  return success
+}
+
+async function copyText(text) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // fallback below
+  }
+
+  return fallbackCopyText(text)
 }
 
 function InfoCard({ label, value, valueClassName = '' }) {
@@ -163,6 +201,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [selectedViolation, setSelectedViolation] = useState(null)
   const [avatarMessage, setAvatarMessage] = useState('')
   const [avatarError, setAvatarError] = useState('')
+  const [telegramMessage, setTelegramMessage] = useState('')
 
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -200,6 +239,16 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
     return () => clearTimeout(timer)
   }, [avatarError])
+
+  useEffect(() => {
+    if (!telegramMessage) return
+
+    const timer = setTimeout(() => {
+      setTelegramMessage('')
+    }, 2600)
+
+    return () => clearTimeout(timer)
+  }, [telegramMessage])
 
   useEffect(() => {
     let isMounted = true
@@ -308,7 +357,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
     ? new Date(profileView.blocked_until).toLocaleString('ru-RU')
     : '—'
 
-  const telegramText = profileLoading
+  const telegramStatusText = profileLoading
     ? 'Загрузка...'
     : profileView?.telegram_username
       ? `@${profileView.telegram_username}`
@@ -412,6 +461,17 @@ export default function AccountPage({ user, profile, profileLoading }) {
     setProfileView(data)
     writeCachedProfile(user.id, data)
     setAvatarMessage('Форма аватара обновлена')
+  }
+
+  async function handleCopyTelegramBot() {
+    const success = await copyText(`@${TELEGRAM_BOT_USERNAME}`)
+    setTelegramMessage(
+      success ? 'Username бота скопирован' : 'Не удалось скопировать username бота'
+    )
+  }
+
+  function handleOpenTelegramBot() {
+    window.open(TELEGRAM_BOT_LINK, '_blank', 'noopener,noreferrer')
   }
 
   async function handleChangePassword(e) {
@@ -534,7 +594,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
               value={profileLoading ? 'Загрузка...' : profileView?.username ?? '—'}
             />
 
-            <InfoCard label="Telegram" value={telegramText} />
+            <InfoCard label="Telegram" value={telegramStatusText} />
 
             {isAdmin ? (
               <>
@@ -550,6 +610,72 @@ export default function AccountPage({ user, profile, profileLoading }) {
                 />
               </>
             ) : null}
+          </div>
+
+          <div className="mt-8 rounded-[32px] border border-fuchsia-500/15 bg-black/40 p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-3xl font-black">Telegram</h2>
+                <p className="mt-3 max-w-3xl text-zinc-400">
+                  На этом этапе мы готовим основу под привязку Telegram. Следующим шагом
+                  будет безопасная связка аккаунта сайта с ботом через одноразовый код
+                  или подтверждение внутри самого бота.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-fuchsia-500/15 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
+                Статус: {telegramStatusText}
+              </div>
+            </div>
+
+            {telegramMessage ? (
+              <div className="mt-5 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                {telegramMessage}
+              </div>
+            ) : null}
+
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <div className="rounded-[24px] border border-fuchsia-500/10 bg-white/[0.02] p-5">
+                <div className="text-sm uppercase tracking-wide text-zinc-500">
+                  Бот сайта
+                </div>
+                <div className="mt-3 text-2xl font-black text-white">
+                  @{TELEGRAM_BOT_USERNAME}
+                </div>
+                <p className="mt-3 text-sm leading-6 text-zinc-400">
+                  Здесь будет происходить получение уведомлений, предупреждений,
+                  страйков и в будущем выдача цифровых товаров.
+                </p>
+              </div>
+
+              <div className="rounded-[24px] border border-fuchsia-500/10 bg-white/[0.02] p-5">
+                <div className="text-sm uppercase tracking-wide text-zinc-500">
+                  Что будет дальше
+                </div>
+                <div className="mt-3 text-base leading-7 text-zinc-300">
+                  Следующим этапом мы добавим саму механику привязки аккаунта к Telegram,
+                  чтобы бот точно понимал, какой пользователь сайта к нему подключён.
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={handleOpenTelegramBot}
+                className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
+              >
+                Открыть Telegram-бота
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyTelegramBot}
+                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-6 py-4 text-base font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+              >
+                Скопировать username бота
+              </button>
+            </div>
           </div>
 
           <div className="mt-8 grid gap-5 lg:grid-cols-2">
