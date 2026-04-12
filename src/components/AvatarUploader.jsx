@@ -115,6 +115,12 @@ function clampOffset(offset, bounds) {
   }
 }
 
+function getDistance(pointA, pointB) {
+  const dx = pointA.x - pointB.x
+  const dy = pointA.y - pointB.y
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
 function AvatarCropModal({
   open,
   imageState,
@@ -126,8 +132,11 @@ function AvatarCropModal({
   const [rotation, setRotation] = useState(0)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [localError, setLocalError] = useState('')
-  const dragStateRef = useRef(null)
+
   const viewportRef = useRef(null)
+  const dragStateRef = useRef(null)
+  const pinchStateRef = useRef(null)
+  const activePointersRef = useRef(new Map())
 
   useEffect(() => {
     if (!open) return
@@ -135,6 +144,9 @@ function AvatarCropModal({
     setRotation(0)
     setOffset({ x: 0, y: 0 })
     setLocalError('')
+    dragStateRef.current = null
+    pinchStateRef.current = null
+    activePointersRef.current.clear()
   }, [open, imageState?.src])
 
   useEffect(() => {
@@ -151,49 +163,6 @@ function AvatarCropModal({
 
     setOffset((prev) => clampOffset(prev, bounds))
   }, [zoom, rotation, open, imageState])
-
-  useEffect(() => {
-    if (!open) return
-
-    function handlePointerMove(event) {
-      const dragState = dragStateRef.current
-      if (!dragState || !imageState) return
-
-      const nextX = dragState.startOffsetX + (event.clientX - dragState.startX)
-      const nextY = dragState.startOffsetY + (event.clientY - dragState.startY)
-
-      const baseScale = getBaseScale(imageState.width, imageState.height)
-      const scale = baseScale * zoom
-      const bounds = getBounds(
-        imageState.width,
-        imageState.height,
-        scale,
-        rotation
-      )
-
-      setOffset(
-        clampOffset(
-          {
-            x: nextX,
-            y: nextY,
-          },
-          bounds
-        )
-      )
-    }
-
-    function handlePointerUp() {
-      dragStateRef.current = null
-    }
-
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', handlePointerUp)
-
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', handlePointerUp)
-    }
-  }, [open, imageState, zoom, rotation])
 
   useEffect(() => {
     if (!open) return
@@ -300,6 +269,151 @@ function AvatarCropModal({
 
     setRotation(nextRotation)
     setOffset((prev) => clampOffset(prev, nextBounds))
+  }
+
+  function handlePointerDown(event) {
+    if (!imageState) return
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    const target = event.currentTarget
+    if (target.setPointerCapture) {
+      target.setPointerCapture(event.pointerId)
+    }
+
+    activePointersRef.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    })
+
+    const points = Array.from(activePointersRef.current.values())
+
+    if (points.length === 1) {
+      dragStateRef.current = {
+        startX: points[0].x,
+        startY: points[0].y,
+        startOffsetX: offset.x,
+        startOffsetY: offset.y,
+      }
+      pinchStateRef.current = null
+      return
+    }
+
+    if (points.length === 2) {
+      dragStateRef.current = null
+      pinchStateRef.current = {
+        startDistance: getDistance(points[0], points[1]),
+        startZoom: zoom,
+      }
+    }
+  }
+
+  function handlePointerMove(event) {
+    if (!imageState) return
+    if (!activePointersRef.current.has(event.pointerId)) return
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    activePointersRef.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    })
+
+    const points = Array.from(activePointersRef.current.values())
+
+    if (points.length === 1 && dragStateRef.current) {
+      const drag = dragStateRef.current
+
+      const nextX = drag.startOffsetX + (points[0].x - drag.startX)
+      const nextY = drag.startOffsetY + (points[0].y - drag.startY)
+
+      const baseScale = getBaseScale(imageState.width, imageState.height)
+      const scale = baseScale * zoom
+      const bounds = getBounds(
+        imageState.width,
+        imageState.height,
+        scale,
+        rotation
+      )
+
+      setOffset(
+        clampOffset(
+          {
+            x: nextX,
+            y: nextY,
+          },
+          bounds
+        )
+      )
+
+      return
+    }
+
+    if (points.length >= 2 && pinchStateRef.current) {
+      const pinch = pinchStateRef.current
+      const distance = getDistance(points[0], points[1])
+
+      if (!distance || !pinch.startDistance) return
+
+      const nextZoom = clamp(
+        pinch.startZoom * (distance / pinch.startDistance),
+        1,
+        3
+      )
+
+      const baseScale = getBaseScale(imageState.width, imageState.height)
+      const scale = baseScale * nextZoom
+      const bounds = getBounds(
+        imageState.width,
+        imageState.height,
+        scale,
+        rotation
+      )
+
+      setZoom(nextZoom)
+      setOffset((prev) => clampOffset(prev, bounds))
+    }
+  }
+
+  function handlePointerUp(event) {
+    if (viewportRef.current?.releasePointerCapture) {
+      try {
+        viewportRef.current.releasePointerCapture(event.pointerId)
+      } catch {
+        // ignore
+      }
+    }
+
+    activePointersRef.current.delete(event.pointerId)
+
+    const points = Array.from(activePointersRef.current.values())
+
+    if (points.length === 0) {
+      dragStateRef.current = null
+      pinchStateRef.current = null
+      return
+    }
+
+    if (points.length === 1) {
+      pinchStateRef.current = null
+      dragStateRef.current = {
+        startX: points[0].x,
+        startY: points[0].y,
+        startOffsetX: offset.x,
+        startOffsetY: offset.y,
+      }
+      return
+    }
+
+    if (points.length === 2) {
+      dragStateRef.current = null
+      pinchStateRef.current = {
+        startDistance: getDistance(points[0], points[1]),
+        startZoom: zoom,
+      }
+    }
   }
 
   const previewWrapperStyle = useMemo(() => {
@@ -426,7 +540,7 @@ function AvatarCropModal({
                 Редактирование аватара
               </div>
               <div className="mt-1 text-xs leading-5 text-zinc-400 sm:text-sm">
-                Перетаскивай изображение, меняй масштаб и поворачивай его при необходимости.
+                Перетаскивай изображение, меняй масштаб, крути колесом мыши на компьютере или двумя пальцами на телефоне.
               </div>
             </div>
 
@@ -444,6 +558,10 @@ function AvatarCropModal({
             <div className="mx-auto w-full max-w-[320px]">
               <div
                 ref={viewportRef}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerUp}
                 className="relative mx-auto aspect-square w-full overflow-hidden rounded-[24px] border border-fuchsia-500/20 bg-black sm:rounded-[28px]"
                 style={{ touchAction: 'none' }}
               >
@@ -455,17 +573,7 @@ function AvatarCropModal({
                     src={imageState.src}
                     alt="Предпросмотр аватара"
                     draggable={false}
-                    onPointerDown={(event) => {
-                      if (event.button !== 0) return
-
-                      dragStateRef.current = {
-                        startX: event.clientX,
-                        startY: event.clientY,
-                        startOffsetX: offset.x,
-                        startOffsetY: offset.y,
-                      }
-                    }}
-                    className="absolute pointer-events-auto select-none"
+                    className="absolute select-none"
                     style={previewImageStyle}
                   />
                 </div>
@@ -511,7 +619,7 @@ function AvatarCropModal({
               />
 
               <div className="mt-3 text-xs leading-5 text-zinc-500 sm:text-sm">
-                На компьютере можно масштабировать колесом мыши.
+                На компьютере можно масштабировать колесом мыши, а на телефоне — двумя пальцами.
               </div>
             </div>
 
