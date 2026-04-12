@@ -465,11 +465,21 @@ export async function fetchMyReviews() {
     return []
   }
 
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+
+  if (authError || !user?.id) {
+    return []
+  }
+
   const { data, error } = await supabase
     .from('reviews')
     .select(
       'id, user_id, payment_request_id, username, avatar_path, avatar_shape, rating, review_text, status, admin_comment, created_at, updated_at, review_images(id, image_path, sort_order, created_at)'
     )
+    .eq('user_id', user.id)
     .order('created_at', { ascending: false })
 
   if (error) {
