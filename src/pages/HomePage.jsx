@@ -15,8 +15,8 @@ const WIDGET_HIDE_HOURS = 12
 const CARD_NUMBER = '2202 2088 0146 2053'
 
 const ORDERS_CACHE_PREFIX = 'velinor_orders_cache_'
-const PUBLIC_STATS_CACHE_KEY = 'velinor_public_stats_v1'
-const REVIEWS_PREVIEW_CACHE_KEY = 'velinor_reviews_preview_v1'
+const PUBLIC_STATS_CACHE_KEY = 'velinor_public_stats_v2'
+const REVIEWS_PREVIEW_CACHE_KEY = 'velinor_reviews_preview_v2'
 
 const plans = [
   {
@@ -267,6 +267,44 @@ function ImagePreviewModal({ item, loading, onClose }) {
   )
 }
 
+function StarIcon({ fillPercent = 0 }) {
+  return (
+    <div className="relative h-6 w-6 text-zinc-700">
+      <span className="absolute inset-0 text-[24px] leading-none">★</span>
+      <span
+        className="absolute inset-0 overflow-hidden text-[24px] leading-none text-yellow-400 drop-shadow-[0_0_12px_rgba(250,204,21,0.55)]"
+        style={{ width: `${fillPercent}%` }}
+      >
+        ★
+      </span>
+    </div>
+  )
+}
+
+function RatingStars({ value }) {
+  const safeValue = Number(value || 0)
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {[1, 2, 3, 4, 5].map((starNumber) => {
+        let fillPercent = 0
+
+        if (safeValue >= starNumber) {
+          fillPercent = 100
+        } else if (safeValue >= starNumber - 0.5) {
+          fillPercent = 50
+        }
+
+        return <StarIcon key={starNumber} fillPercent={fillPercent} />
+      })}
+
+      <div className="ml-1 text-sm font-bold text-yellow-300">
+        {safeValue > 0 ? safeValue.toFixed(1) : '—'}
+      </div>
+    </div>
+  )
+}
+
 function getStatusLabel(status) {
   if (status === 'approved') return 'Успешно оплачено'
   if (status === 'rejected') return 'Отклонено'
@@ -296,8 +334,10 @@ export default function HomePage({ user, profile }) {
   const [toast, setToast] = useState('')
   const [siteStats, setSiteStats] = useState({
     clientsCount: 0,
+    approvedRequestsCount: 0,
     successRate: 0,
     reviewsCount: 0,
+    averageRating: 0,
   })
   const [reviewsPreview, setReviewsPreview] = useState([])
 
@@ -424,8 +464,10 @@ export default function HomePage({ user, profile }) {
       if (!cachedStats) {
         setSiteStats({
           clientsCount: 0,
+          approvedRequestsCount: 0,
           successRate: 0,
           reviewsCount: 0,
+          averageRating: 0,
         })
       }
       return
@@ -457,8 +499,10 @@ export default function HomePage({ user, profile }) {
 
       const nextStats = {
         clientsCount: uniqueBuyers,
+        approvedRequestsCount: approvedRequests,
         successRate,
         reviewsCount: Number(reviewsStats?.published_reviews_count || 0),
+        averageRating: Number(reviewsStats?.average_rating || 0),
       }
 
       setSiteStats(nextStats)
@@ -469,8 +513,10 @@ export default function HomePage({ user, profile }) {
       if (!cachedStats) {
         setSiteStats({
           clientsCount: 0,
+          approvedRequestsCount: 0,
           successRate: 0,
           reviewsCount: 0,
+          averageRating: 0,
         })
       }
     }
@@ -503,8 +549,12 @@ export default function HomePage({ user, profile }) {
   const stats = useMemo(
     () => [
       { value: `${siteStats.clientsCount}+`, label: 'клиентов' },
-      { value: `${siteStats.successRate}%`, label: 'успешных заявок' },
-      { value: `${siteStats.reviewsCount}+`, label: 'отзывов' },
+      { value: `${siteStats.approvedRequestsCount}+`, label: 'подтверждено оплат' },
+      { value: `${siteStats.successRate}%`, label: 'успешность заявок' },
+      {
+        value: siteStats.averageRating > 0 ? `${siteStats.averageRating}/5` : '—',
+        label: 'средний рейтинг',
+      },
     ],
     [siteStats]
   )
@@ -769,7 +819,7 @@ export default function HomePage({ user, profile }) {
           id="hero"
           className="scroll-mt-28 flex min-h-[72vh] items-center justify-center py-20 sm:py-28"
         >
-          <div className="max-w-4xl text-center">
+          <div className="max-w-5xl text-center">
             <h1 className="text-5xl font-black leading-tight text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.18)] sm:text-7xl">
               Добро пожаловать в{' '}
               <span className="bg-gradient-to-r from-violet-300 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent">
@@ -792,7 +842,7 @@ export default function HomePage({ user, profile }) {
               </button>
             </div>
 
-            <div className="mt-14 grid gap-5 sm:grid-cols-3">
+            <div className="mt-14 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
               {stats.map((stat) => (
                 <div
                   key={stat.label}
@@ -802,6 +852,10 @@ export default function HomePage({ user, profile }) {
                   <div className="mt-3 text-zinc-400">{stat.label}</div>
                 </div>
               ))}
+            </div>
+
+            <div className="mt-6 text-sm text-zinc-500">
+              Статистика формируется из реальных покупок и опубликованных отзывов.
             </div>
           </div>
         </section>
@@ -862,6 +916,11 @@ export default function HomePage({ user, profile }) {
             subtitle="Публичные отзывы пользователей после подтверждённых покупок"
           />
 
+          <div className="mt-6 text-center text-sm text-zinc-500">
+            Опубликовано отзывов: {siteStats.reviewsCount} · Средний рейтинг:{' '}
+            {siteStats.averageRating > 0 ? `${siteStats.averageRating}/5` : '—'}
+          </div>
+
           <div className="mt-14 grid gap-6 lg:grid-cols-3">
             {reviewsPreview.length === 0 ? (
               <div className="col-span-full rounded-[30px] border border-fuchsia-500/10 bg-black/70 p-10 text-center shadow-[0_0_50px_rgba(0,0,0,0.35)]">
@@ -900,6 +959,10 @@ export default function HomePage({ user, profile }) {
                       <div className="text-sm text-zinc-500">
                         {formatDateTime(review.created_at)}
                       </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <RatingStars value={review.rating || 5} />
                     </div>
 
                     <div className="mt-4 line-clamp-6 whitespace-pre-wrap text-base leading-8 text-zinc-300">

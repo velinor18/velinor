@@ -572,18 +572,32 @@ export async function fetchReviewsStats() {
   if (!supabase) {
     return {
       published_reviews_count: 0,
+      average_rating: 0,
     }
   }
 
-  const { data, error } = await supabase.rpc('get_reviews_stats')
+  const { data, error } = await supabase
+    .from('reviews')
+    .select('rating')
+    .eq('status', 'published')
 
   if (error) {
     throw new Error(error.message || 'Не удалось загрузить статистику отзывов')
   }
 
-  const row = Array.isArray(data) ? data[0] : data
+  const ratings = (data || [])
+    .map((item) => Number(item?.rating || 0))
+    .filter((value) => value > 0)
+
+  const publishedReviewsCount = ratings.length
+  const sum = ratings.reduce((acc, value) => acc + value, 0)
+  const averageRating =
+    publishedReviewsCount > 0
+      ? Math.round((sum / publishedReviewsCount) * 10) / 10
+      : 0
 
   return {
-    published_reviews_count: Number(row?.published_reviews_count || 0),
+    published_reviews_count: publishedReviewsCount,
+    average_rating: averageRating,
   }
 }
