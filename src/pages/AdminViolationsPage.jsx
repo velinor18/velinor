@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import {
-  getStrikeReasonLabel,
-  getViolationSourceLabel,
-} from '../lib/violations'
+import { getStrikeReasonLabel, getViolationSourceLabel } from '../lib/violations'
+import { readDataCache, safeSupabase, writeDataCache } from '../lib/asyncData'
 
 const PROFILE_SELECT_QUERY = `
   id,
@@ -18,6 +16,9 @@ const PROFILE_SELECT_QUERY = `
   payment_is_blocked,
   payment_blocked_until
 `
+
+const VIOLATIONS_CACHE_KEY = 'admin_violations_page_v2'
+const VIOLATIONS_CACHE_TTL_MS = 60 * 1000
 
 function isRestrictionActive(isBlocked, blockedUntil) {
   if (!isBlocked) return false
@@ -124,7 +125,17 @@ function HistoryModal({
 }) {
   if (!open || !offender) return null
 
-  const profile = offender.profile
+  const profile = offender.profile || {
+    id: offender.userId,
+    username: offender.userId,
+    hearts_left: 3,
+    strikes_count: offender.activeViolationsCount,
+    chat_is_blocked: false,
+    chat_blocked_until: null,
+    payment_is_blocked: false,
+    payment_blocked_until: null,
+  }
+
   const chatBlocked = isRestrictionActive(
     profile?.chat_is_blocked,
     profile?.chat_blocked_until
@@ -305,54 +316,93 @@ export default function AdminViolationsPage() {
       return
     }
 
-    if (silent) {
+    const cached = readDataCache(VIOLATIONS_CACHE_KEY, VIOLATIONS_CACHE_TTL_MS)
+
+    if (!silent && cached?.violations) {
+      setViolations(Array.isArray(cached.violations) ? cached.violations : [])
+      setProfilesMap(cached.profilesMap || {})
+      setLoading(false)
+    } else if (silent) {
       setReloading(true)
     } else {
       setLoading(true)
     }
 
-    const { data: violationsData, error: violationsError } = await supabase
-      .from('violations')
-      .select(
-        'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
+    try {
+      const violationsResult = await safeSupabase(
+        () =>
+          supabase
+            .from('violations')
+            .select(
+              'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
+            )
+            .order('created_at', { ascending: false }),
+        {
+          timeoutMs: 7000,
+          retries: 1,
+          timeoutMessage: 'Раздел нарушений загружается слишком долго',
+        }
       )
-      .order('created_at', { ascending: false })
 
-    if (violationsError) {
-      console.error(violationsError)
-      setViolations([])
-      setProfilesMap({})
+      const violationsError = violationsResult?.error
+      const safeViolations = violationsResult?.data ?? []
+
+      if (violationsError) {
+        throw violationsError
+      }
+
+      const uniqueUserIds = [
+        ...new Set(safeViolations.map((item) => item.user_id).filter(Boolean)),
+      ]
+
+      let nextProfilesMap = {}
+
+      if (uniqueUserIds.length > 0) {
+        const profilesResult = await safeSupabase(
+          () =>
+            supabase
+              .from('profiles')
+              .select(PROFILE_SELECT_QUERY)
+              .in('id', uniqueUserIds),
+          {
+            timeoutMs: 7000,
+            retries: 1,
+            timeoutMessage: 'Профили пользователей загружаются слишком долго',
+          }
+        )
+
+        if (profilesResult?.error) {
+          console.error(profilesResult.error)
+          setErrorText(
+            'Нарушения загружены, но профили пользователей прочитать не удалось'
+          )
+        } else {
+          nextProfilesMap = Object.fromEntries(
+            (profilesResult?.data ?? []).map((profile) => [profile.id, profile])
+          )
+        }
+      }
+
+      setViolations(safeViolations)
+      setProfilesMap(nextProfilesMap)
+      writeDataCache(VIOLATIONS_CACHE_KEY, {
+        violations: safeViolations,
+        profilesMap: nextProfilesMap,
+      })
       setLoading(false)
       setReloading(false)
-      setErrorText('Не удалось загрузить нарушения')
-      return
-    }
+    } catch (error) {
+      console.error(error)
 
-    const safeViolations = violationsData ?? []
-    const uniqueUserIds = [...new Set(safeViolations.map((item) => item.user_id).filter(Boolean))]
-
-    let nextProfilesMap = {}
-
-    if (uniqueUserIds.length > 0) {
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select(PROFILE_SELECT_QUERY)
-        .in('id', uniqueUserIds)
-
-      if (profilesError) {
-        console.error(profilesError)
-        setErrorText('Нарушения загружены, но профили пользователей прочитать не удалось')
-      } else {
-        nextProfilesMap = Object.fromEntries(
-          (profilesData ?? []).map((profile) => [profile.id, profile])
-        )
+      if (!cached?.violations) {
+        setViolations([])
+        setProfilesMap({})
+        setLoading(false)
       }
-    }
 
-    setViolations(safeViolations)
-    setProfilesMap(nextProfilesMap)
-    setLoading(false)
-    setReloading(false)
+      setReloading(false)
+      setErrorText(error?.message || 'Не удалось загрузить нарушения')
+    }
   }, [])
 
   useEffect(() => {
@@ -376,17 +426,21 @@ export default function AdminViolationsPage() {
 
       const username = (item.profile?.username || '').toLowerCase()
       const reasons = item.history
-        .map((historyItem) => getStrikeReasonLabel(historyItem.reason_code).toLowerCase())
+        .map((historyItem) =>
+          getStrikeReasonLabel(historyItem.reason_code).toLowerCase()
+        )
         .join(' ')
       const sources = item.history
-        .map((historyItem) => getViolationSourceLabel(historyItem.source_type).toLowerCase())
+        .map((historyItem) =>
+          getViolationSourceLabel(historyItem.source_type).toLowerCase()
+        )
         .join(' ')
 
       return (
         username.includes(query) ||
         reasons.includes(query) ||
         sources.includes(query) ||
-        item.userId.toLowerCase().includes(query)
+        String(item.userId).toLowerCase().includes(query)
       )
     })
   }, [offenders, filterMode, searchText])
@@ -408,7 +462,18 @@ export default function AdminViolationsPage() {
     offenders.find((item) => item.userId === selectedUserId) ||
     null
 
-  const selectedProfile = selectedOffender?.profile || null
+  const selectedProfile = selectedOffender?.profile || {
+    id: selectedOffender?.userId || '',
+    username: selectedOffender?.profile?.username || selectedOffender?.userId || '—',
+    hearts_left: 3,
+    strikes_count: selectedOffender?.activeViolationsCount ?? 0,
+    is_blocked: false,
+    blocked_until: null,
+    chat_is_blocked: false,
+    chat_blocked_until: null,
+    payment_is_blocked: false,
+    payment_blocked_until: null,
+  }
 
   const heartsLeft = clampHearts(selectedProfile?.hearts_left)
   const strikesCount = clampStrikes(selectedProfile?.strikes_count)
@@ -429,7 +494,7 @@ export default function AdminViolationsPage() {
   )
 
   const handleRemoveStrike = useCallback(async () => {
-    if (!supabase || !selectedOffender || !selectedProfile) {
+    if (!supabase || !selectedOffender) {
       setErrorText('Пользователь не выбран')
       return
     }
@@ -454,58 +519,70 @@ export default function AdminViolationsPage() {
     const nextStrikes = Math.max(0, strikesCount - 1)
     const nextHearts = Math.min(3, heartsLeft + 1)
 
-    const { error: violationError } = await supabase
-      .from('violations')
-      .update({
-        is_revoked: true,
-      })
-      .eq('id', latestActiveViolation.id)
-
-    if (violationError) {
-      console.error(violationError)
-      setActionLoading(false)
-      setErrorText('Не удалось снять страйк')
-      return
-    }
-
-    const profilePatch = {
-      strikes_count: nextStrikes,
-      hearts_left: nextHearts,
-    }
-
-    if (nextStrikes < 3) {
-      profilePatch.is_blocked = false
-      profilePatch.blocked_until = null
-    }
-
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .update(profilePatch)
-      .eq('id', selectedProfile.id)
-
-    setActionLoading(false)
-
-    if (profileError) {
-      console.error(profileError)
-      setErrorText(
-        'Страйк в истории был снят, но профиль не обновился полностью. Нужна дополнительная проверка.'
+    try {
+      const violationUpdate = await safeSupabase(
+        () =>
+          supabase
+            .from('violations')
+            .update({
+              is_revoked: true,
+            })
+            .eq('id', latestActiveViolation.id),
+        {
+          timeoutMs: 7000,
+          retries: 0,
+          timeoutMessage: 'Снятие страйка заняло слишком много времени',
+        }
       )
-      await loadData({ silent: true })
-      return
-    }
 
-    setToast('Страйк снят')
-    await loadData({ silent: true })
-  }, [
-    heartsLeft,
-    strikesCount,
-    selectedOffender,
-    selectedProfile,
-    loadData,
-  ])
+      if (violationUpdate?.error) {
+        throw violationUpdate.error
+      }
+
+      const profilePatch = {
+        strikes_count: nextStrikes,
+        hearts_left: nextHearts,
+      }
+
+      if (nextStrikes < 3) {
+        profilePatch.is_blocked = false
+        profilePatch.blocked_until = null
+      }
+
+      const profileUpdate = await safeSupabase(
+        () =>
+          supabase
+            .from('profiles')
+            .update(profilePatch)
+            .eq('id', selectedOffender.userId),
+        {
+          timeoutMs: 7000,
+          retries: 0,
+          timeoutMessage: 'Обновление профиля заняло слишком много времени',
+        }
+      )
+
+      if (profileUpdate?.error) {
+        setErrorText(
+          'Страйк в истории был снят, но профиль не обновился полностью. Нужна дополнительная проверка.'
+        )
+        await loadData({ silent: true })
+        setActionLoading(false)
+        return
+      }
+
+      setToast('Страйк снят')
+      await loadData({ silent: true })
+    } catch (error) {
+      console.error(error)
+      setErrorText(error?.message || 'Не удалось снять страйк')
+    } finally {
+      setActionLoading(false)
+    }
+  }, [heartsLeft, strikesCount, selectedOffender, loadData])
 
   const handleUnblockChat = useCallback(async () => {
-    if (!supabase || !selectedProfile) {
+    if (!supabase || !selectedOffender) {
       setErrorText('Пользователь не выбран')
       return
     }
@@ -523,28 +600,39 @@ export default function AdminViolationsPage() {
     setActionLoading(true)
     setErrorText('')
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        chat_is_blocked: false,
-        chat_blocked_until: null,
-      })
-      .eq('id', selectedProfile.id)
+    try {
+      const result = await safeSupabase(
+        () =>
+          supabase
+            .from('profiles')
+            .update({
+              chat_is_blocked: false,
+              chat_blocked_until: null,
+            })
+            .eq('id', selectedOffender.userId),
+        {
+          timeoutMs: 7000,
+          retries: 0,
+          timeoutMessage: 'Снятие чат-блокировки заняло слишком много времени',
+        }
+      )
 
-    setActionLoading(false)
+      if (result?.error) {
+        throw result.error
+      }
 
-    if (error) {
+      setToast('Чат-блокировка снята')
+      await loadData({ silent: true })
+    } catch (error) {
       console.error(error)
-      setErrorText('Не удалось снять чат-блокировку')
-      return
+      setErrorText(error?.message || 'Не удалось снять чат-блокировку')
+    } finally {
+      setActionLoading(false)
     }
-
-    setToast('Чат-блокировка снята')
-    await loadData({ silent: true })
-  }, [chatBlocked, selectedProfile, loadData])
+  }, [chatBlocked, selectedOffender, loadData])
 
   const handleUnblockPayments = useCallback(async () => {
-    if (!supabase || !selectedProfile) {
+    if (!supabase || !selectedOffender) {
       setErrorText('Пользователь не выбран')
       return
     }
@@ -562,25 +650,36 @@ export default function AdminViolationsPage() {
     setActionLoading(true)
     setErrorText('')
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        payment_is_blocked: false,
-        payment_blocked_until: null,
-      })
-      .eq('id', selectedProfile.id)
+    try {
+      const result = await safeSupabase(
+        () =>
+          supabase
+            .from('profiles')
+            .update({
+              payment_is_blocked: false,
+              payment_blocked_until: null,
+            })
+            .eq('id', selectedOffender.userId),
+        {
+          timeoutMs: 7000,
+          retries: 0,
+          timeoutMessage: 'Снятие блокировки покупок заняло слишком много времени',
+        }
+      )
 
-    setActionLoading(false)
+      if (result?.error) {
+        throw result.error
+      }
 
-    if (error) {
+      setToast('Блокировка покупок снята')
+      await loadData({ silent: true })
+    } catch (error) {
       console.error(error)
-      setErrorText('Не удалось снять блокировку покупок')
-      return
+      setErrorText(error?.message || 'Не удалось снять блокировку покупок')
+    } finally {
+      setActionLoading(false)
     }
-
-    setToast('Блокировка покупок снята')
-    await loadData({ silent: true })
-  }, [paymentBlocked, selectedProfile, loadData])
+  }, [paymentBlocked, selectedOffender, loadData])
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
@@ -744,7 +843,7 @@ export default function AdminViolationsPage() {
           </div>
 
           <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">
-            {selectedOffender && selectedProfile ? (
+            {selectedOffender ? (
               <>
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
@@ -755,7 +854,8 @@ export default function AdminViolationsPage() {
                       {selectedProfile.username}
                     </h2>
                     <div className="mt-3 text-zinc-400">
-                      Последнее нарушение: {formatDateTime(selectedOffender.latestViolation?.created_at)}
+                      Последнее нарушение:{' '}
+                      {formatDateTime(selectedOffender.latestViolation?.created_at)}
                     </div>
                   </div>
 

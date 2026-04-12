@@ -2,10 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { downloadAvatarAsObjectUrl } from '../lib/avatar'
+import {
+  readDataCache,
+  safeSupabase,
+  writeDataCache,
+} from '../lib/asyncData'
 import { normalizeAvatarShape } from '../lib/avatarShapes'
 
-const INITIAL_MESSAGES_LIMIT = 40
-const OLDER_MESSAGES_LIMIT = 60
+const INITIAL_MESSAGES_LIMIT = 25
+const OLDER_MESSAGES_LIMIT = 40
+const CHAT_CACHE_TTL_MS = 90 * 1000
 
 function getAvatarShapeClass(shape) {
   const normalized = normalizeAvatarShape(shape)
@@ -143,6 +149,7 @@ export default function ChatPage({ user, profile }) {
   const bottomRef = useRef(null)
   const chatViewportRef = useRef(null)
   const requestedAvatarPathsRef = useRef(new Set())
+  const skipNextAutoScrollRef = useRef(false)
 
   useEffect(() => {
     setChatRestriction({
@@ -172,7 +179,7 @@ export default function ChatPage({ user, profile }) {
       requestedAvatarPathsRef.current.add(path)
     })
 
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       uniquePaths.map(async (path) => {
         const url = await downloadAvatarAsObjectUrl(path)
         return {
@@ -185,9 +192,11 @@ export default function ChatPage({ user, profile }) {
     setAvatarUrlDirectory((prev) => {
       const next = { ...prev }
 
-      results.forEach(({ path, url }) => {
-        if (url) {
-          next[path] = url
+      results.forEach((result, index) => {
+        const path = uniquePaths[index]
+
+        if (result.status === 'fulfilled' && result.value?.url) {
+          next[path] = result.value.url
         } else {
           requestedAvatarPathsRef.current.delete(path)
         }
@@ -209,31 +218,57 @@ export default function ChatPage({ user, profile }) {
         return
       }
 
-      setLoading(true)
+      const cacheKey = `chat_initial_${user.id}`
+      const cachedMessages = readDataCache(cacheKey, CHAT_CACHE_TTL_MS)
 
-      const { data, error } = await supabase
-        .from('chat_messages')
-        .select(
-          'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
-        )
-        .order('created_at', { ascending: false })
-        .limit(INITIAL_MESSAGES_LIMIT)
-
-      if (!isMounted) return
-
-      if (error) {
-        console.error(error)
-        setMessages([])
+      if (cachedMessages?.length) {
+        setMessages(cachedMessages)
+        setHasOlderMessages(cachedMessages.length === INITIAL_MESSAGES_LIMIT)
         setLoading(false)
-        return
+        loadAvatarUrlsForMessages(cachedMessages)
+      } else {
+        setLoading(true)
       }
 
-      const nextMessages = [...(data ?? [])].reverse()
-      setMessages(nextMessages)
-      setHasOlderMessages((data?.length ?? 0) === INITIAL_MESSAGES_LIMIT)
-      setLoading(false)
+      try {
+        const { data, error } = await safeSupabase(
+          () =>
+            supabase
+              .from('chat_messages')
+              .select(
+                'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
+              )
+              .order('created_at', { ascending: false })
+              .limit(INITIAL_MESSAGES_LIMIT),
+          {
+            timeoutMs: 7000,
+            retries: 1,
+            timeoutMessage: 'Чат загружается слишком долго',
+          }
+        )
 
-      loadAvatarUrlsForMessages(nextMessages)
+        if (!isMounted) return
+        if (error) throw error
+
+        const nextMessages = [...(data ?? [])].reverse()
+
+        setMessages(nextMessages)
+        setHasOlderMessages((data?.length ?? 0) === INITIAL_MESSAGES_LIMIT)
+        setLoading(false)
+
+        writeDataCache(cacheKey, nextMessages)
+        loadAvatarUrlsForMessages(nextMessages)
+      } catch (error) {
+        console.error(error)
+
+        if (!isMounted) return
+
+        if (!cachedMessages?.length) {
+          setMessages([])
+          setErrorText(error.message || 'Не удалось загрузить чат')
+          setLoading(false)
+        }
+      }
     }
 
     loadInitialMessages()
@@ -277,11 +312,17 @@ export default function ChatPage({ user, profile }) {
   }, [user])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (skipNextAutoScrollRef.current) {
+      skipNextAutoScrollRef.current = false
+      return
+    }
+
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [messages])
 
   useEffect(() => {
     if (!errorText) return
+
     const timer = setTimeout(() => setErrorText(''), 3600)
     return () => clearTimeout(timer)
   }, [errorText])
@@ -293,36 +334,48 @@ export default function ChatPage({ user, profile }) {
 
     setLoadingOlder(true)
 
-    const oldestCreatedAt = messages[0]?.created_at
+    try {
+      const oldestCreatedAt = messages[0]?.created_at
 
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .select(
-        'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
+      const { data, error } = await safeSupabase(
+        () =>
+          supabase
+            .from('chat_messages')
+            .select(
+              'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
+            )
+            .lt('created_at', oldestCreatedAt)
+            .order('created_at', { ascending: false })
+            .limit(OLDER_MESSAGES_LIMIT),
+        {
+          timeoutMs: 7000,
+          retries: 1,
+          timeoutMessage: 'Старые сообщения загружаются слишком долго',
+        }
       )
-      .lt('created_at', oldestCreatedAt)
-      .order('created_at', { ascending: false })
-      .limit(OLDER_MESSAGES_LIMIT)
 
-    setLoadingOlder(false)
+      setLoadingOlder(false)
 
-    if (error) {
+      if (error) throw error
+
+      const olderMessages = [...(data ?? [])].reverse()
+
+      skipNextAutoScrollRef.current = true
+
+      setMessages((prev) => [...olderMessages, ...prev])
+      setHasOlderMessages((data?.length ?? 0) === OLDER_MESSAGES_LIMIT)
+      loadAvatarUrlsForMessages(olderMessages)
+
+      requestAnimationFrame(() => {
+        if (chatViewportRef.current) {
+          chatViewportRef.current.scrollTop = 120
+        }
+      })
+    } catch (error) {
       console.error(error)
-      setErrorText('Не удалось загрузить старые сообщения')
-      return
+      setLoadingOlder(false)
+      setErrorText(error.message || 'Не удалось загрузить старые сообщения')
     }
-
-    const olderMessages = [...(data ?? [])].reverse()
-
-    setMessages((prev) => [...olderMessages, ...prev])
-    setHasOlderMessages((data?.length ?? 0) === OLDER_MESSAGES_LIMIT)
-    loadAvatarUrlsForMessages(olderMessages)
-
-    requestAnimationFrame(() => {
-      if (chatViewportRef.current) {
-        chatViewportRef.current.scrollTop = 120
-      }
-    })
   }
 
   async function handleSubmit(event) {
@@ -356,31 +409,45 @@ export default function ChatPage({ user, profile }) {
 
     setSending(true)
 
-    const { data, error } = await supabase.rpc('send_chat_message', {
-      p_text: trimmed,
-    })
+    try {
+      const { data, error } = await safeSupabase(
+        () =>
+          supabase.rpc('send_chat_message', {
+            p_text: trimmed,
+          }),
+        {
+          timeoutMs: 7000,
+          retries: 0,
+          timeoutMessage: 'Сообщение отправляется слишком долго',
+        }
+      )
 
-    setSending(false)
+      setSending(false)
 
-    if (error) {
-      console.error(error)
-      setErrorText(error.message || 'Не удалось отправить сообщение')
-      return
-    }
-
-    if (!data?.ok) {
-      if (data?.chat_is_blocked || data?.chat_blocked_until) {
-        setChatRestriction({
-          isBlocked: Boolean(data?.chat_is_blocked),
-          blockedUntil: data?.chat_blocked_until ?? null,
-        })
+      if (error) {
+        console.error(error)
+        setErrorText(error.message || 'Не удалось отправить сообщение')
+        return
       }
 
-      setErrorText(data?.message || 'Сообщение отклонено')
-      return
-    }
+      if (!data?.ok) {
+        if (data?.chat_is_blocked || data?.chat_blocked_until) {
+          setChatRestriction({
+            isBlocked: Boolean(data?.chat_is_blocked),
+            blockedUntil: data?.chat_blocked_until ?? null,
+          })
+        }
 
-    setMessageText('')
+        setErrorText(data?.message || 'Сообщение отклонено')
+        return
+      }
+
+      setMessageText('')
+    } catch (error) {
+      console.error(error)
+      setSending(false)
+      setErrorText(error.message || 'Не удалось отправить сообщение')
+    }
   }
 
   if (!user) {
@@ -445,7 +512,9 @@ export default function ChatPage({ user, profile }) {
                     key={item.id}
                     item={item}
                     isOwn={item.user_id === user.id}
-                    avatarUrl={item.avatar_path ? avatarUrlDirectory[item.avatar_path] || '' : ''}
+                    avatarUrl={
+                      item.avatar_path ? avatarUrlDirectory[item.avatar_path] || '' : ''
+                    }
                   />
                 ))
               )}

@@ -11,10 +11,11 @@ import RequestsPage from './pages/RequestsPage'
 import RulesPage from './pages/RulesPage'
 import ChatPage from './pages/ChatPage'
 import ReviewsPage from './pages/ReviewsPage'
+import AdminViolationsPage from './pages/AdminViolationsPage'
 import { supabase } from './lib/supabase'
+import { safeSupabase, sleep } from './lib/asyncData'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const PROFILE_SELECT_QUERY = `
   id,
@@ -83,25 +84,39 @@ export default function App() {
         return
       }
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
+      try {
+        const {
+          data: { session },
+        } = await safeSupabase(() => supabase.auth.getSession(), {
+          timeoutMs: 7000,
+          retries: 1,
+          timeoutMessage: 'Не удалось быстро получить сессию',
+        })
 
-      if (!isMounted) return
+        if (!isMounted) return
 
-      const nextUser = session?.user ?? null
-      setUser(nextUser)
+        const nextUser = session?.user ?? null
+        setUser(nextUser)
 
-      if (nextUser) {
-        const cachedProfile = readCachedProfile(nextUser.id)
-        if (cachedProfile) {
-          setProfile(cachedProfile)
+        if (nextUser) {
+          const cachedProfile = readCachedProfile(nextUser.id)
+          if (cachedProfile) {
+            setProfile(cachedProfile)
+          }
+        } else {
+          setProfile(null)
         }
-      } else {
-        setProfile(null)
-      }
+      } catch (error) {
+        console.error(error)
 
-      setAuthLoading(false)
+        if (!isMounted) return
+        setUser(null)
+        setProfile(null)
+      } finally {
+        if (isMounted) {
+          setAuthLoading(false)
+        }
+      }
 
       const authListener = supabase.auth.onAuthStateChange((_event, nextSession) => {
         if (!isMounted) return
@@ -126,6 +141,7 @@ export default function App() {
 
     return () => {
       isMounted = false
+
       if (subscription) {
         subscription.unsubscribe()
       }
@@ -138,9 +154,6 @@ export default function App() {
     const loadProfile = async () => {
       if (!supabase || !user) {
         if (isMounted) {
-          if (user?.id) {
-            clearCachedProfile(user.id)
-          }
           setProfile(null)
           setProfileLoading(false)
         }
@@ -149,38 +162,64 @@ export default function App() {
 
       const cachedProfile = readCachedProfile(user.id)
 
-      if (!cachedProfile) {
-        setProfileLoading(true)
-      } else {
+      if (cachedProfile) {
+        setProfile(cachedProfile)
         setProfileLoading(false)
+      } else {
+        setProfileLoading(true)
       }
 
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select(PROFILE_SELECT_QUERY)
-          .eq('id', user.id)
-          .maybeSingle()
+      let lastError = null
 
-        if (!isMounted) return
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const { data, error } = await safeSupabase(
+            () =>
+              supabase
+                .from('profiles')
+                .select(PROFILE_SELECT_QUERY)
+                .eq('id', user.id)
+                .maybeSingle(),
+            {
+              timeoutMs: 7000,
+              retries: 0,
+              timeoutMessage: 'Профиль загружается слишком долго',
+            }
+          )
 
-        if (data) {
-          setProfile(data)
-          writeCachedProfile(user.id, data)
+          if (!isMounted) return
+
+          if (error && error.code !== 'PGRST116') {
+            throw error
+          }
+
+          if (data) {
+            setProfile(data)
+            writeCachedProfile(user.id, data)
+          }
+
           setProfileLoading(false)
           return
-        }
-
-        if (error && error.code !== 'PGRST116') {
+        } catch (error) {
+          lastError = error
           console.error(error)
-          break
-        }
 
-        await sleep(180)
+          if (attempt < 1) {
+            await sleep(250)
+          }
+        }
       }
 
-      if (isMounted) {
-        setProfileLoading(false)
+      if (!isMounted) return
+
+      if (!cachedProfile) {
+        setProfile(null)
+      }
+
+      setProfileLoading(false)
+
+      if (lastError) {
+        console.error(lastError)
       }
     }
 
@@ -188,6 +227,14 @@ export default function App() {
 
     return () => {
       isMounted = false
+    }
+  }, [user])
+
+  useEffect(() => {
+    if (!user?.id) return
+
+    return () => {
+      clearCachedProfile(user.id)
     }
   }, [user])
 
@@ -249,6 +296,20 @@ export default function App() {
               profileLoading={profileLoading}
             >
               <RequestsPage />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/violations"
+          element={
+            <AdminRoute
+              user={user}
+              profile={profile}
+              authLoading={authLoading}
+              profileLoading={profileLoading}
+            >
+              <AdminViolationsPage />
             </AdminRoute>
           }
         />

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
+import { readDataCache, safeSupabase, writeDataCache } from '../lib/asyncData'
 
 const PAYMENT_REJECTION_OPTIONS = [
   { value: 'wrong_image', label: 'Загружено не то изображение' },
@@ -12,6 +13,8 @@ const PAYMENT_REJECTION_OPTIONS = [
   { value: 'duplicate_request', label: 'Дубликат заявки' },
   { value: 'other', label: 'Другая причина' },
 ]
+
+const REQUESTS_CACHE_KEY = 'admin_requests_v2'
 
 function generatePromoCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -198,42 +201,89 @@ function getStatusLabel(status) {
 export default function RequestsPage() {
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)
+  const [reloading, setReloading] = useState(false)
   const [selectedRequest, setSelectedRequest] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [processingId, setProcessingId] = useState(null)
   const [requestsTab, setRequestsTab] = useState('pending')
   const [clearingArchive, setClearingArchive] = useState(false)
+  const [toast, setToast] = useState('')
+  const [errorText, setErrorText] = useState('')
 
   const [rejectModalOpen, setRejectModalOpen] = useState(false)
   const [rejectTarget, setRejectTarget] = useState(null)
   const [rejectReasonCode, setRejectReasonCode] = useState('wrong_image')
   const [rejectComment, setRejectComment] = useState('')
 
-  const loadRequests = async () => {
+  useEffect(() => {
+    if (!toast) return
+    const timer = setTimeout(() => setToast(''), 2600)
+    return () => clearTimeout(timer)
+  }, [toast])
+
+  useEffect(() => {
+    if (!errorText) return
+    const timer = setTimeout(() => setErrorText(''), 3600)
+    return () => clearTimeout(timer)
+  }, [errorText])
+
+  const loadRequests = async ({ silent = false } = {}) => {
     if (!supabase) {
       setLoading(false)
+      setReloading(false)
+      setErrorText('Supabase не подключён')
       return
     }
 
-    setLoading(true)
+    const cachedRequests = readDataCache(REQUESTS_CACHE_KEY, 60 * 1000)
 
-    const { data, error } = await supabase
-      .from('payment_requests')
-      .select(
-        'id, user_id, username, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden, rejection_reason_code, admin_comment'
-      )
-      .eq('admin_hidden', false)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error(error)
-      setRequests([])
+    if (cachedRequests?.length && !silent) {
+      setRequests(cachedRequests)
       setLoading(false)
-      return
     }
 
-    setRequests(data ?? [])
-    setLoading(false)
+    if (silent) {
+      setReloading(true)
+    } else if (!cachedRequests?.length) {
+      setLoading(true)
+    }
+
+    try {
+      const { data, error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .select(
+              'id, user_id, username, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden, rejection_reason_code, admin_comment'
+            )
+            .eq('admin_hidden', false)
+            .order('created_at', { ascending: false }),
+        {
+          timeoutMs: 8000,
+          retries: 1,
+          timeoutMessage: 'Заявки загружаются слишком долго',
+        }
+      )
+
+      if (error) {
+        throw error
+      }
+
+      const nextRequests = data ?? []
+      setRequests(nextRequests)
+      writeDataCache(REQUESTS_CACHE_KEY, nextRequests)
+    } catch (error) {
+      console.error(error)
+
+      if (!cachedRequests?.length) {
+        setRequests([])
+      }
+
+      setErrorText(error.message || 'Не удалось загрузить заявки')
+    } finally {
+      setLoading(false)
+      setReloading(false)
+    }
   }
 
   useEffect(() => {
@@ -260,13 +310,27 @@ export default function RequestsPage() {
       imageUrl: null,
     })
 
-    const imageUrl = await downloadPrivateImageAsObjectUrl(item.image_path)
+    try {
+      const imageUrl = await downloadPrivateImageAsObjectUrl(item.image_path)
 
-    setSelectedRequest({
-      ...item,
-      imageUrl,
-    })
-    setPreviewLoading(false)
+      setSelectedRequest({
+        ...item,
+        imageUrl: imageUrl || null,
+      })
+
+      if (!imageUrl) {
+        setErrorText('Не удалось получить изображение скриншота')
+      }
+    } catch (error) {
+      console.error(error)
+      setSelectedRequest({
+        ...item,
+        imageUrl: null,
+      })
+      setErrorText('Не удалось загрузить изображение')
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
   const openRejectModal = (item) => {
@@ -290,42 +354,56 @@ export default function RequestsPage() {
     const code = item.promo_code || generatePromoCode()
     const reviewedAt = new Date().toISOString()
     setProcessingId(item.id)
+    setErrorText('')
 
-    const { error } = await supabase
-      .from('payment_requests')
-      .update({
-        status: 'approved',
-        promo_code: code,
-        reviewed_at: reviewedAt,
-        rejection_reason_code: null,
-        admin_comment: null,
-        admin_hidden: false,
-      })
-      .eq('id', item.id)
-
-    if (error) {
-      console.error(error)
-      setProcessingId(null)
-      return
-    }
-
-    setRequests((prev) =>
-      prev.map((request) =>
-        request.id === item.id
-          ? {
-              ...request,
+    try {
+      const { error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .update({
               status: 'approved',
               promo_code: code,
               reviewed_at: reviewedAt,
               rejection_reason_code: null,
               admin_comment: null,
               admin_hidden: false,
-            }
-          : request
+            })
+            .eq('id', item.id),
+        {
+          timeoutMs: 8000,
+          retries: 0,
+          timeoutMessage: 'Подтверждение оплаты идёт слишком долго',
+        }
       )
-    )
 
-    setProcessingId(null)
+      if (error) {
+        throw error
+      }
+
+      setRequests((prev) =>
+        prev.map((request) =>
+          request.id === item.id
+            ? {
+                ...request,
+                status: 'approved',
+                promo_code: code,
+                reviewed_at: reviewedAt,
+                rejection_reason_code: null,
+                admin_comment: null,
+                admin_hidden: false,
+              }
+            : request
+        )
+      )
+
+      setToast('Оплата подтверждена')
+    } catch (error) {
+      console.error(error)
+      setErrorText(error.message || 'Не удалось подтвердить оплату')
+    } finally {
+      setProcessingId(null)
+    }
   }
 
   const confirmRejectPayment = async () => {
@@ -333,85 +411,113 @@ export default function RequestsPage() {
 
     const reviewedAt = new Date().toISOString()
     setProcessingId(rejectTarget.id)
+    setErrorText('')
 
-    const { error } = await supabase
-      .from('payment_requests')
-      .update({
-        status: 'rejected',
-        promo_code: null,
-        reviewed_at: reviewedAt,
-        rejection_reason_code: rejectReasonCode,
-        admin_comment: rejectComment.trim() || null,
-        admin_hidden: false,
-      })
-      .eq('id', rejectTarget.id)
-
-    if (error) {
-      console.error(error)
-      setProcessingId(null)
-      return
-    }
-
-    setRequests((prev) =>
-      prev.map((request) =>
-        request.id === rejectTarget.id
-          ? {
-              ...request,
+    try {
+      const { error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .update({
               status: 'rejected',
               promo_code: null,
               reviewed_at: reviewedAt,
               rejection_reason_code: rejectReasonCode,
               admin_comment: rejectComment.trim() || null,
               admin_hidden: false,
-            }
-          : request
+            })
+            .eq('id', rejectTarget.id),
+        {
+          timeoutMs: 8000,
+          retries: 0,
+          timeoutMessage: 'Отклонение заявки идёт слишком долго',
+        }
       )
-    )
 
-    setProcessingId(null)
-    closeRejectModal()
+      if (error) {
+        throw error
+      }
+
+      setRequests((prev) =>
+        prev.map((request) =>
+          request.id === rejectTarget.id
+            ? {
+                ...request,
+                status: 'rejected',
+                promo_code: null,
+                reviewed_at: reviewedAt,
+                rejection_reason_code: rejectReasonCode,
+                admin_comment: rejectComment.trim() || null,
+                admin_hidden: false,
+              }
+            : request
+        )
+      )
+
+      setToast('Заявка отклонена')
+      closeRejectModal()
+    } catch (error) {
+      console.error(error)
+      setErrorText(error.message || 'Не удалось отклонить заявку')
+    } finally {
+      setProcessingId(null)
+    }
   }
 
   const restoreToPending = async (item) => {
     if (!supabase) return
 
     setProcessingId(item.id)
+    setErrorText('')
 
-    const { error } = await supabase
-      .from('payment_requests')
-      .update({
-        status: 'pending',
-        promo_code: null,
-        reviewed_at: null,
-        rejection_reason_code: null,
-        admin_comment: null,
-        admin_hidden: false,
-      })
-      .eq('id', item.id)
-
-    if (error) {
-      console.error(error)
-      setProcessingId(null)
-      return
-    }
-
-    setRequests((prev) =>
-      prev.map((request) =>
-        request.id === item.id
-          ? {
-              ...request,
+    try {
+      const { error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .update({
               status: 'pending',
               promo_code: null,
               reviewed_at: null,
               rejection_reason_code: null,
               admin_comment: null,
               admin_hidden: false,
-            }
-          : request
+            })
+            .eq('id', item.id),
+        {
+          timeoutMs: 8000,
+          retries: 0,
+          timeoutMessage: 'Возврат заявки на проверку идёт слишком долго',
+        }
       )
-    )
 
-    setProcessingId(null)
+      if (error) {
+        throw error
+      }
+
+      setRequests((prev) =>
+        prev.map((request) =>
+          request.id === item.id
+            ? {
+                ...request,
+                status: 'pending',
+                promo_code: null,
+                reviewed_at: null,
+                rejection_reason_code: null,
+                admin_comment: null,
+                admin_hidden: false,
+              }
+            : request
+        )
+      )
+
+      setToast('Заявка возвращена на проверку')
+    } catch (error) {
+      console.error(error)
+      setErrorText(error.message || 'Не удалось вернуть заявку на проверку')
+    } finally {
+      setProcessingId(null)
+    }
   }
 
   const hideArchivedRequestForAdmin = async (item) => {
@@ -423,22 +529,36 @@ export default function RequestsPage() {
     if (!confirmed) return
 
     setProcessingId(item.id)
+    setErrorText('')
 
-    const { error } = await supabase
-      .from('payment_requests')
-      .update({
-        admin_hidden: true,
-      })
-      .eq('id', item.id)
+    try {
+      const { error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .update({
+              admin_hidden: true,
+            })
+            .eq('id', item.id),
+        {
+          timeoutMs: 8000,
+          retries: 0,
+          timeoutMessage: 'Скрытие записи идёт слишком долго',
+        }
+      )
 
-    if (error) {
+      if (error) {
+        throw error
+      }
+
+      setRequests((prev) => prev.filter((request) => request.id !== item.id))
+      setToast('Запись скрыта из архива администратора')
+    } catch (error) {
       console.error(error)
+      setErrorText(error.message || 'Не удалось скрыть запись')
+    } finally {
       setProcessingId(null)
-      return
     }
-
-    setRequests((prev) => prev.filter((request) => request.id !== item.id))
-    setProcessingId(null)
   }
 
   const deletePendingRequest = async (item) => {
@@ -448,24 +568,52 @@ export default function RequestsPage() {
     if (!confirmed) return
 
     setProcessingId(item.id)
+    setErrorText('')
 
-    if (item.image_path) {
-      await supabase.storage.from('payment-screenshots').remove([item.image_path])
-    }
+    try {
+      if (item.image_path) {
+        const { error: removeImageError } = await safeSupabase(
+          () =>
+            supabase.storage
+              .from('payment-screenshots')
+              .remove([item.image_path]),
+          {
+            timeoutMs: 8000,
+            retries: 0,
+            timeoutMessage: 'Удаление скриншота идёт слишком долго',
+          }
+        )
 
-    const { error } = await supabase
-      .from('payment_requests')
-      .delete()
-      .eq('id', item.id)
+        if (removeImageError) {
+          console.error(removeImageError)
+        }
+      }
 
-    if (error) {
+      const { error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .delete()
+            .eq('id', item.id),
+        {
+          timeoutMs: 8000,
+          retries: 0,
+          timeoutMessage: 'Удаление заявки идёт слишком долго',
+        }
+      )
+
+      if (error) {
+        throw error
+      }
+
+      setRequests((prev) => prev.filter((request) => request.id !== item.id))
+      setToast('Заявка удалена')
+    } catch (error) {
       console.error(error)
+      setErrorText(error.message || 'Не удалось удалить заявку')
+    } finally {
       setProcessingId(null)
-      return
     }
-
-    setRequests((prev) => prev.filter((request) => request.id !== item.id))
-    setProcessingId(null)
   }
 
   const clearArchive = async () => {
@@ -477,24 +625,38 @@ export default function RequestsPage() {
     if (!confirmed) return
 
     setClearingArchive(true)
+    setErrorText('')
 
-    const ids = archivedRequests.map((item) => item.id)
+    try {
+      const ids = archivedRequests.map((item) => item.id)
 
-    const { error } = await supabase
-      .from('payment_requests')
-      .update({
-        admin_hidden: true,
-      })
-      .in('id', ids)
+      const { error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .update({
+              admin_hidden: true,
+            })
+            .in('id', ids),
+        {
+          timeoutMs: 9000,
+          retries: 0,
+          timeoutMessage: 'Очистка архива идёт слишком долго',
+        }
+      )
 
-    if (error) {
+      if (error) {
+        throw error
+      }
+
+      setRequests((prev) => prev.filter((item) => !ids.includes(item.id)))
+      setToast('Архив скрыт у администратора')
+    } catch (error) {
       console.error(error)
+      setErrorText(error.message || 'Не удалось очистить архив')
+    } finally {
       setClearingArchive(false)
-      return
     }
-
-    setRequests((prev) => prev.filter((item) => !ids.includes(item.id)))
-    setClearingArchive(false)
   }
 
   return (
@@ -532,10 +694,11 @@ export default function RequestsPage() {
           </button>
 
           <button
-            onClick={loadRequests}
-            className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+            onClick={() => loadRequests({ silent: true })}
+            disabled={loading || reloading || Boolean(processingId)}
+            className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
           >
-            Обновить
+            {reloading ? 'Обновляем...' : 'Обновить'}
           </button>
 
           {requestsTab === 'archive' ? (
@@ -549,6 +712,18 @@ export default function RequestsPage() {
           ) : null}
         </div>
       </div>
+
+      {toast ? (
+        <div className="mb-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+          {toast}
+        </div>
+      ) : null}
+
+      {errorText ? (
+        <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {errorText}
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="rounded-[28px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 text-center text-lg text-zinc-300">
