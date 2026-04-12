@@ -72,21 +72,28 @@ function getBaseScale(width, height) {
   return Math.max(VIEWPORT_SIZE / width, VIEWPORT_SIZE / height)
 }
 
-function getDisplayDimensions(width, height, scale, rotation) {
+function getScaledImageSize(width, height, scale) {
+  return {
+    scaledWidth: width * scale,
+    scaledHeight: height * scale,
+  }
+}
+
+function getRotatedBoundingSize(width, height, scale, rotation) {
+  const { scaledWidth, scaledHeight } = getScaledImageSize(width, height, scale)
   const safeRotation = normalizeRotation(rotation)
   const isQuarterTurn = safeRotation === 90 || safeRotation === 270
 
-  const logicalWidth = isQuarterTurn ? height : width
-  const logicalHeight = isQuarterTurn ? width : height
-
   return {
-    displayWidth: logicalWidth * scale,
-    displayHeight: logicalHeight * scale,
+    displayWidth: isQuarterTurn ? scaledHeight : scaledWidth,
+    displayHeight: isQuarterTurn ? scaledWidth : scaledHeight,
+    scaledWidth,
+    scaledHeight,
   }
 }
 
 function getBounds(width, height, scale, rotation) {
-  const { displayWidth, displayHeight } = getDisplayDimensions(
+  const { displayWidth, displayHeight } = getRotatedBoundingSize(
     width,
     height,
     scale,
@@ -254,24 +261,46 @@ function AvatarCropModal({
   }
 
   const previewWrapperStyle = useMemo(() => {
+    if (!imageState) return {}
+
+    const baseScale = getBaseScale(imageState.width, imageState.height)
+    const scale = baseScale * zoom
+    const { displayWidth, displayHeight } = getRotatedBoundingSize(
+      imageState.width,
+      imageState.height,
+      scale,
+      rotation
+    )
+
     return {
+      width: `${displayWidth}px`,
+      height: `${displayHeight}px`,
       left: '50%',
       top: '50%',
       transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px))`,
     }
-  }, [offset])
+  }, [imageState, zoom, rotation, offset])
 
   const previewImageStyle = useMemo(() => {
     if (!imageState) return {}
 
     const baseScale = getBaseScale(imageState.width, imageState.height)
-    const totalScale = baseScale * zoom
+    const scale = baseScale * zoom
+    const { scaledWidth, scaledHeight } = getScaledImageSize(
+      imageState.width,
+      imageState.height,
+      scale
+    )
 
     return {
-      width: `${imageState.width}px`,
-      height: `${imageState.height}px`,
-      transform: `rotate(${rotation}deg) scale(${totalScale})`,
+      width: `${scaledWidth}px`,
+      height: `${scaledHeight}px`,
+      left: '50%',
+      top: '50%',
+      transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
       transformOrigin: 'center center',
+      maxWidth: 'none',
+      maxHeight: 'none',
     }
   }, [imageState, zoom, rotation])
 
@@ -293,6 +322,9 @@ function AvatarCropModal({
       const factor = OUTPUT_SIZE / VIEWPORT_SIZE
       const safeRotation = normalizeRotation(rotation)
 
+      const drawWidth = imageState.width * totalScale * factor
+      const drawHeight = imageState.height * totalScale * factor
+
       const canvas = document.createElement('canvas')
       canvas.width = OUTPUT_SIZE
       canvas.height = OUTPUT_SIZE
@@ -309,14 +341,13 @@ function AvatarCropModal({
         OUTPUT_SIZE / 2 + offset.y * factor
       )
       context.rotate((safeRotation * Math.PI) / 180)
-      context.scale(totalScale * factor, totalScale * factor)
 
       context.drawImage(
         img,
-        -imageState.width / 2,
-        -imageState.height / 2,
-        imageState.width,
-        imageState.height
+        -drawWidth / 2,
+        -drawHeight / 2,
+        drawWidth,
+        drawHeight
       )
 
       const blob = await new Promise((resolve) => {
@@ -393,7 +424,7 @@ function AvatarCropModal({
                       startOffsetY: offset.y,
                     }
                   }}
-                  className="pointer-events-auto select-none"
+                  className="absolute pointer-events-auto select-none"
                   style={previewImageStyle}
                 />
               </div>
