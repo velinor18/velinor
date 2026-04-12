@@ -14,7 +14,6 @@ import {
   publishReview,
   revokeReviewPreviewUrl,
 } from '../lib/reviews'
-import { readDataCache, writeDataCache } from '../lib/asyncData'
 
 function formatDateTime(value) {
   try {
@@ -74,10 +73,10 @@ function ReviewAvatar({ username, avatarUrl, avatarShape }) {
 
 function StarIcon({ fillPercent = 0 }) {
   return (
-    <div className="relative h-8 w-8 leading-none text-zinc-700">
-      <span className="absolute inset-0 text-[32px]">★</span>
+    <div className="relative h-8 w-8 text-zinc-700">
+      <span className="absolute inset-0 text-[32px] leading-none">★</span>
       <span
-        className="absolute inset-0 overflow-hidden text-[32px] text-yellow-400 drop-shadow-[0_0_12px_rgba(250,204,21,0.55)]"
+        className="absolute inset-0 overflow-hidden text-[32px] leading-none text-yellow-400 drop-shadow-[0_0_12px_rgba(250,204,21,0.55)]"
         style={{ width: `${fillPercent}%` }}
       >
         ★
@@ -88,10 +87,14 @@ function StarIcon({ fillPercent = 0 }) {
 
 function RatingStars({ value, onChange, readonly = false, size = 'normal' }) {
   const safeValue = Number(value || 0)
-  const iconSizeClass = size === 'small' ? 'h-6 w-6 text-[24px]' : 'h-8 w-8 text-[32px]'
+  const starClass = size === 'small' ? 'h-6 w-6' : 'h-8 w-8'
+  const numberClass =
+    size === 'small'
+      ? 'ml-2 text-xs font-bold text-yellow-300'
+      : 'ml-2 text-sm font-bold text-yellow-300'
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1.5">
       {[1, 2, 3, 4, 5].map((starNumber) => {
         let fillPercent = 0
 
@@ -102,7 +105,7 @@ function RatingStars({ value, onChange, readonly = false, size = 'normal' }) {
         }
 
         return (
-          <div key={starNumber} className={`relative ${iconSizeClass}`}>
+          <div key={starNumber} className={`relative ${starClass}`}>
             {!readonly ? (
               <>
                 <button
@@ -125,9 +128,7 @@ function RatingStars({ value, onChange, readonly = false, size = 'normal' }) {
         )
       })}
 
-      <div className="ml-1 text-sm font-bold text-yellow-300">
-        {safeValue.toFixed(1)}
-      </div>
+      <div className={numberClass}>{safeValue.toFixed(1)}</div>
     </div>
   )
 }
@@ -243,7 +244,12 @@ function ReviewCard({
               <div className="break-all text-xl font-black text-white">
                 {review.username}
               </div>
-              <div className="mt-1 text-sm text-zinc-500">
+
+              <div className="mt-2">
+                <RatingStars value={review.rating || 5} readonly size="small" />
+              </div>
+
+              <div className="mt-2 text-sm text-zinc-500">
                 {formatDateTime(review.created_at)}
               </div>
             </div>
@@ -257,10 +263,6 @@ function ReviewCard({
             >
               {isHidden ? 'Скрыт' : 'Опубликован'}
             </div>
-          </div>
-
-          <div className="mt-3">
-            <RatingStars value={review.rating || 5} readonly size="small" />
           </div>
 
           <div className="mt-4 whitespace-pre-wrap break-words text-base leading-8 text-zinc-200">
@@ -388,14 +390,12 @@ function CreateReviewCard({
         >
           <div>
             <label className="mb-3 block text-sm font-bold uppercase tracking-wide text-zinc-400">
-              Выберите покупку для отзыва
+              Покупка для отзыва
             </label>
 
             <div className="grid gap-3">
               {paymentOptions.map((item) => {
                 const active = String(item.id) === String(paymentRequestId)
-                const dateLabel =
-                  item.approved_at || item.reviewed_at || item.created_at
 
                 return (
                   <button
@@ -408,19 +408,10 @@ function CreateReviewCard({
                         : 'border-fuchsia-500/15 bg-white/[0.02] hover:border-fuchsia-400/25 hover:bg-fuchsia-900/10'
                     }`}
                   >
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <div className="text-lg font-black text-white">
-                          {item.plan_name}
-                        </div>
-                        <div className="mt-1 text-sm text-zinc-400">
-                          Стоимость: {item.price_label}
-                        </div>
-                      </div>
-
-                      <div className="text-sm text-zinc-500">
-                        {formatDateTime(dateLabel)}
-                      </div>
+                    <div className="text-lg font-black text-white">{item.plan_name}</div>
+                    <div className="mt-2 text-sm text-zinc-400">{item.price_label}</div>
+                    <div className="mt-1 text-sm text-zinc-500">
+                      {formatDateTime(item.approved_at || item.reviewed_at || item.created_at)}
                     </div>
                   </button>
                 )
@@ -556,8 +547,6 @@ function CreateReviewCard({
   )
 }
 
-const REVIEWS_PUBLIC_CACHE_KEY = 'reviews_public_v2'
-
 export default function ReviewsPage({ user, profile }) {
   const isAdmin = profile?.role === 'admin'
 
@@ -568,14 +557,12 @@ export default function ReviewsPage({ user, profile }) {
 
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
-  const [reloading, setReloading] = useState(false)
   const [adminBusyId, setAdminBusyId] = useState(null)
 
   const [reviewText, setReviewText] = useState('')
   const [rating, setRating] = useState(5)
   const [paymentRequestId, setPaymentRequestId] = useState('')
   const [selectedImages, setSelectedImages] = useState([])
-  const selectedImagesRef = useRef([])
 
   const [submitError, setSubmitError] = useState('')
   const [submitMessage, setSubmitMessage] = useState('')
@@ -588,137 +575,55 @@ export default function ReviewsPage({ user, profile }) {
   const [reviewsView, setReviewsView] = useState('public')
 
   const allReviewsForAvatarScan = useMemo(() => {
-    const base = [...publicReviews, ...myReviews, ...adminReviews]
+    const base = [...publicReviews]
 
-    const uniqueMap = new Map()
-    base.forEach((review) => {
-      if (!uniqueMap.has(review.id)) {
-        uniqueMap.set(review.id, review)
-      }
-    })
-
-    return Array.from(uniqueMap.values())
-  }, [publicReviews, myReviews, adminReviews])
-
-  const visibleReviews = useMemo(() => {
-    if (reviewsView === 'mine') {
-      return myReviews
+    if (user) {
+      base.push(...myReviews)
     }
 
-    if (reviewsView === 'admin') {
-      return adminReviews
+    if (isAdmin) {
+      base.push(...adminReviews)
     }
 
-    return publicReviews
-  }, [reviewsView, publicReviews, myReviews, adminReviews])
+    return base
+  }, [publicReviews, myReviews, adminReviews, user, isAdmin])
 
-  const loadAllData = useCallback(
-    async ({ silent = false } = {}) => {
-      if (silent) {
-        setReloading(true)
-      } else {
-        setLoading(true)
-      }
+  const loadAllData = useCallback(async () => {
+    setLoading(true)
 
-      const cachedPublicReviews = readDataCache(REVIEWS_PUBLIC_CACHE_KEY, 90 * 1000)
-
-      if (cachedPublicReviews?.length && !silent) {
-        setPublicReviews(cachedPublicReviews)
-        setLoading(false)
-      }
-
-      const userReviewsCacheKey = user?.id ? `reviews_my_${user.id}` : ''
-      const userPaymentsCacheKey = user?.id ? `reviews_payments_${user.id}` : ''
-      const adminReviewsCacheKey = isAdmin ? 'reviews_admin_v2' : ''
-
-      const cachedMyReviews = userReviewsCacheKey
-        ? readDataCache(userReviewsCacheKey, 90 * 1000)
-        : null
-      const cachedPaymentOptions = userPaymentsCacheKey
-        ? readDataCache(userPaymentsCacheKey, 90 * 1000)
-        : null
-      const cachedAdminReviews = adminReviewsCacheKey
-        ? readDataCache(adminReviewsCacheKey, 60 * 1000)
-        : null
-
-      if (cachedMyReviews && !silent) {
-        setMyReviews(cachedMyReviews)
-      }
-
-      if (cachedPaymentOptions && !silent) {
-        setPaymentOptions(cachedPaymentOptions)
-      }
-
-      if (cachedAdminReviews && !silent) {
-        setAdminReviews(cachedAdminReviews)
-      }
-
-      const tasks = [
+    try {
+      const [publicResult, userResult, adminResult] = await Promise.all([
         fetchPublishedReviews(50),
-        user ? fetchReviewablePaymentRequests() : Promise.resolve([]),
-        user ? fetchMyReviews() : Promise.resolve([]),
+        user
+          ? Promise.all([fetchReviewablePaymentRequests(), fetchMyReviews()])
+          : Promise.resolve([[], []]),
         isAdmin ? fetchAllReviewsForAdmin() : Promise.resolve([]),
-      ]
+      ])
 
-      const [
-        publicResult,
-        paymentOptionsResult,
-        myReviewsResult,
-        adminReviewsResult,
-      ] = await Promise.allSettled(tasks)
-
-      if (publicResult.status === 'fulfilled') {
-        setPublicReviews(publicResult.value)
-        writeDataCache(REVIEWS_PUBLIC_CACHE_KEY, publicResult.value)
-      }
-
-      if (paymentOptionsResult.status === 'fulfilled') {
-        setPaymentOptions(paymentOptionsResult.value)
-        if (userPaymentsCacheKey) {
-          writeDataCache(userPaymentsCacheKey, paymentOptionsResult.value)
-        }
-      }
-
-      if (myReviewsResult.status === 'fulfilled') {
-        setMyReviews(myReviewsResult.value)
-        if (userReviewsCacheKey) {
-          writeDataCache(userReviewsCacheKey, myReviewsResult.value)
-        }
-      }
-
-      if (adminReviewsResult.status === 'fulfilled') {
-        setAdminReviews(adminReviewsResult.value)
-        if (adminReviewsCacheKey) {
-          writeDataCache(adminReviewsCacheKey, adminReviewsResult.value)
-        }
-      }
-
-      if (!silent) {
-        setLoading(false)
-      }
-
-      setReloading(false)
-    },
-    [user, isAdmin]
-  )
+      setPublicReviews(publicResult)
+      setPaymentOptions(userResult[0] || [])
+      setMyReviews(userResult[1] || [])
+      setAdminReviews(adminResult || [])
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setLoading(false)
+    }
+  }, [user, isAdmin])
 
   useEffect(() => {
     loadAllData()
   }, [loadAllData])
 
   useEffect(() => {
-    selectedImagesRef.current = selectedImages
-  }, [selectedImages])
-
-  useEffect(() => {
     return () => {
-      selectedImagesRef.current.forEach((item) => {
+      selectedImages.forEach((item) => {
         if (item?.previewUrl) {
           revokeReviewPreviewUrl(item.previewUrl)
         }
       })
     }
-  }, [])
+  }, [selectedImages])
 
   useEffect(() => {
     const uniquePaths = [
@@ -736,7 +641,7 @@ export default function ReviewsPage({ user, profile }) {
       requestedAvatarPathsRef.current.add(path)
     })
 
-    Promise.allSettled(
+    Promise.all(
       uniquePaths.map(async (path) => ({
         path,
         url: await downloadAvatarAsObjectUrl(path),
@@ -745,13 +650,9 @@ export default function ReviewsPage({ user, profile }) {
       setAvatarUrls((prev) => {
         const next = { ...prev }
 
-        results.forEach((result, index) => {
-          const path = uniquePaths[index]
-
-          if (result.status === 'fulfilled' && result.value?.url) {
-            next[path] = result.value.url
-          } else {
-            requestedAvatarPathsRef.current.delete(path)
+        results.forEach(({ path, url }) => {
+          if (url) {
+            next[path] = url
           }
         })
 
@@ -765,6 +666,12 @@ export default function ReviewsPage({ user, profile }) {
     const timer = setTimeout(() => setSubmitMessage(''), 3200)
     return () => clearTimeout(timer)
   }, [submitMessage])
+
+  const visibleReviews = useMemo(() => {
+    if (reviewsView === 'mine') return myReviews
+    if (reviewsView === 'admin') return adminReviews
+    return publicReviews
+  }, [reviewsView, publicReviews, myReviews, adminReviews])
 
   const handleAddImages = async (incomingFiles) => {
     setSubmitError('')
@@ -798,7 +705,6 @@ export default function ReviewsPage({ user, profile }) {
 
     setSelectedImages((prev) => {
       const target = prev[index]
-
       if (target?.previewUrl) {
         revokeReviewPreviewUrl(target.previewUrl)
       }
@@ -839,9 +745,11 @@ export default function ReviewsPage({ user, profile }) {
       setRating(5)
       setPaymentRequestId('')
       setSubmitMessage('Отзыв успешно опубликован')
-      setReviewsView('mine')
 
-      await loadAllData({ silent: true })
+      await loadAllData()
+      if (user) {
+        setReviewsView('mine')
+      }
     } catch (error) {
       console.error(error)
       setSubmitError(error?.message || 'Не удалось сохранить отзыв')
@@ -860,7 +768,7 @@ export default function ReviewsPage({ user, profile }) {
 
     try {
       await hideReview(review.id, comment || null)
-      await loadAllData({ silent: true })
+      await loadAllData()
     } catch (error) {
       console.error(error)
     } finally {
@@ -880,7 +788,7 @@ export default function ReviewsPage({ user, profile }) {
 
     try {
       await publishReview(review.id, comment || null)
-      await loadAllData({ silent: true })
+      await loadAllData()
     } catch (error) {
       console.error(error)
     } finally {
@@ -899,7 +807,7 @@ export default function ReviewsPage({ user, profile }) {
 
     try {
       await deleteReview(review.id)
-      await loadAllData({ silent: true })
+      await loadAllData()
     } catch (error) {
       console.error(error)
     } finally {
@@ -920,55 +828,15 @@ export default function ReviewsPage({ user, profile }) {
             <h1 className="text-4xl font-black sm:text-5xl">Отзывы</h1>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => loadAllData({ silent: true })}
-              className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-            >
-              {reloading ? 'Обновляем...' : 'Обновить'}
-            </button>
-
-            <NavLink
-              to="/"
-              className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-            >
-              На главную
-            </NavLink>
-          </div>
+          <NavLink
+            to="/"
+            className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+          >
+            На главную
+          </NavLink>
         </div>
 
-        {user ? (
-          <div className="mt-8">
-            <CreateReviewCard
-              user={user}
-              profile={profile}
-              creating={creating}
-              submitError={submitError}
-              submitMessage={submitMessage}
-              reviewText={reviewText}
-              rating={rating}
-              paymentRequestId={paymentRequestId}
-              paymentOptions={paymentOptions}
-              selectedImages={selectedImages}
-              onTextChange={setReviewText}
-              onRatingChange={setRating}
-              onPaymentRequestChange={setPaymentRequestId}
-              onAddImages={handleAddImages}
-              onRemoveImage={handleRemoveImage}
-              onSubmit={async () => {
-                setCreating(true)
-                try {
-                  await handleCreateReview()
-                } finally {
-                  setCreating(false)
-                }
-              }}
-            />
-          </div>
-        ) : null}
-
-        <div className="mt-10 flex flex-wrap gap-3">
+        <div className="mt-8 flex flex-wrap gap-3">
           <button
             type="button"
             onClick={() => setReviewsView('public')}
@@ -1010,12 +878,42 @@ export default function ReviewsPage({ user, profile }) {
           ) : null}
         </div>
 
+        {user ? (
+          <div className="mt-8">
+            <CreateReviewCard
+              user={user}
+              profile={profile}
+              creating={creating}
+              submitError={submitError}
+              submitMessage={submitMessage}
+              reviewText={reviewText}
+              rating={rating}
+              paymentRequestId={paymentRequestId}
+              paymentOptions={paymentOptions}
+              selectedImages={selectedImages}
+              onTextChange={setReviewText}
+              onRatingChange={setRating}
+              onPaymentRequestChange={setPaymentRequestId}
+              onAddImages={handleAddImages}
+              onRemoveImage={handleRemoveImage}
+              onSubmit={async () => {
+                setCreating(true)
+                try {
+                  await handleCreateReview()
+                } finally {
+                  setCreating(false)
+                }
+              }}
+            />
+          </div>
+        ) : null}
+
         {loading ? (
           <div className="mt-8 rounded-[28px] border border-fuchsia-500/15 bg-black/30 px-4 py-10 text-center text-zinc-300">
             Загружаем отзывы...
           </div>
         ) : (
-          <div className="mt-8">
+          <div className="mt-10">
             <div className="mb-5 flex items-center justify-between gap-4">
               <h2 className="text-3xl font-black">
                 {reviewsView === 'mine'

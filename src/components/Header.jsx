@@ -21,14 +21,14 @@ export default function Header({
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
 
   const linkClass = ({ isActive }) =>
-    `rounded-xl border px-4 py-2.5 text-sm font-semibold transition lg:px-5 lg:text-base ${
+    `shrink-0 whitespace-nowrap rounded-xl border px-4 py-2.5 text-sm font-semibold transition lg:px-5 lg:text-base ${
       isActive
         ? 'border-fuchsia-400/50 bg-fuchsia-700/20 text-white'
         : 'border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200 hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
     }`
 
   const plainButtonClass =
-    'rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 lg:px-5 lg:text-base'
+    'shrink-0 whitespace-nowrap rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 lg:px-5 lg:text-base'
 
   const mobileButtonClass =
     'w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-left text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
@@ -87,7 +87,7 @@ export default function Header({
   return (
     <>
       <header className="sticky top-0 z-40 border-b border-fuchsia-700/20 bg-black/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:gap-14 lg:px-8">
+        <div className="mx-auto flex max-w-[1540px] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:gap-10 lg:px-8">
           <button
             onClick={goHomeTop}
             className="flex shrink-0 items-center gap-3 text-left"

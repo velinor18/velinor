@@ -1,5 +1,4 @@
 import { supabase } from './supabase'
-import { safeSupabase } from './asyncData'
 
 export const REVIEW_IMAGES_BUCKET = 'review-images'
 export const MAX_REVIEW_IMAGES_COUNT = 3
@@ -72,7 +71,7 @@ function mapReviewRow(row) {
 
   return {
     ...row,
-    rating: normalizeReviewRating(row?.rating),
+    rating: Number(row?.rating ?? 5),
     review_images: [...images]
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
       .map((image) => ({
@@ -104,16 +103,6 @@ export function normalizeReviewRating(value) {
   if (rounded > 5) return 5
 
   return rounded
-}
-
-export function validateReviewRating(value) {
-  const rating = normalizeReviewRating(value)
-
-  if (rating < 1 || rating > 5) {
-    return 'Оценка должна быть от 1 до 5'
-  }
-
-  return ''
 }
 
 export function validateReviewText(reviewText) {
@@ -300,21 +289,13 @@ export async function uploadReviewImages(userId, imageItems) {
 
       const path = buildReviewImagePath(userId, index + 1, file.name)
 
-      const { error } = await safeSupabase(
-        () =>
-          supabase.storage
-            .from(REVIEW_IMAGES_BUCKET)
-            .upload(path, file, {
-              cacheControl: '3600',
-              upsert: false,
-              contentType: file.type || 'image/png',
-            }),
-        {
-          timeoutMs: 10000,
-          retries: 0,
-          timeoutMessage: 'Загрузка изображений отзыва идёт слишком долго',
-        }
-      )
+      const { error } = await supabase.storage
+        .from(REVIEW_IMAGES_BUCKET)
+        .upload(path, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type || 'image/png',
+        })
 
       if (error) {
         throw new Error(error.message || 'Не удалось загрузить изображение')
@@ -339,17 +320,9 @@ export async function removeReviewImagesByPaths(paths) {
   const normalizedPaths = normalizeFiles(paths).filter(Boolean)
   if (!normalizedPaths.length) return
 
-  const { error } = await safeSupabase(
-    () =>
-      supabase.storage
-        .from(REVIEW_IMAGES_BUCKET)
-        .remove(normalizedPaths),
-    {
-      timeoutMs: 8000,
-      retries: 0,
-      timeoutMessage: 'Удаление изображений отзыва идёт слишком долго',
-    }
-  )
+  const { error } = await supabase.storage
+    .from(REVIEW_IMAGES_BUCKET)
+    .remove(normalizedPaths)
 
   if (error) {
     console.error(error)
@@ -383,11 +356,6 @@ export async function createReviewWithImages({
     throw new Error(textError)
   }
 
-  const ratingError = validateReviewRating(rating)
-  if (ratingError) {
-    throw new Error(ratingError)
-  }
-
   const selectionError = validateReviewImagesSelection(
     normalizeFiles(imageItems).map((item) => item?.file || item)
   )
@@ -396,54 +364,24 @@ export async function createReviewWithImages({
     throw new Error(selectionError)
   }
 
-  const { data: existingReview, error: existingReviewError } = await safeSupabase(
-    () =>
-      supabase
-        .from('reviews')
-        .select('id')
-        .eq('payment_request_id', paymentRequestId)
-        .maybeSingle(),
-    {
-      timeoutMs: 7000,
-      retries: 0,
-      timeoutMessage: 'Проверка существующего отзыва идёт слишком долго',
-    }
-  )
-
-  if (existingReviewError && existingReviewError.code !== 'PGRST116') {
-    throw new Error(existingReviewError.message || 'Не удалось проверить отзыв')
-  }
-
-  if (existingReview?.id) {
-    throw new Error('Для этой покупки отзыв уже был оставлен')
-  }
-
   let reviewId = null
   let uploadedPaths = []
 
   try {
-    const { data: reviewRow, error: reviewError } = await safeSupabase(
-      () =>
-        supabase
-          .from('reviews')
-          .insert({
-            user_id: userId,
-            payment_request_id: paymentRequestId,
-            username: username || 'Пользователь',
-            avatar_path: avatarPath,
-            avatar_shape: avatarShape,
-            rating: normalizeReviewRating(rating),
-            review_text: String(reviewText).trim(),
-            status: 'published',
-          })
-          .select('id')
-          .single(),
-      {
-        timeoutMs: 9000,
-        retries: 0,
-        timeoutMessage: 'Создание отзыва идёт слишком долго',
-      }
-    )
+    const { data: reviewRow, error: reviewError } = await supabase
+      .from('reviews')
+      .insert({
+        user_id: userId,
+        payment_request_id: paymentRequestId,
+        username: username || 'Пользователь',
+        avatar_path: avatarPath,
+        avatar_shape: avatarShape,
+        rating: normalizeReviewRating(rating),
+        review_text: String(reviewText).trim(),
+        status: 'published',
+      })
+      .select('id')
+      .single()
 
     if (reviewError || !reviewRow?.id) {
       throw new Error(reviewError?.message || 'Не удалось создать отзыв')
@@ -459,17 +397,9 @@ export async function createReviewWithImages({
         sort_order: index + 1,
       }))
 
-      const { error: imagesError } = await safeSupabase(
-        () =>
-          supabase
-            .from('review_images')
-            .insert(rows),
-        {
-          timeoutMs: 9000,
-          retries: 0,
-          timeoutMessage: 'Сохранение изображений отзыва идёт слишком долго',
-        }
-      )
+      const { error: imagesError } = await supabase
+        .from('review_images')
+        .insert(rows)
 
       if (imagesError) {
         throw new Error(
@@ -488,11 +418,7 @@ export async function createReviewWithImages({
     }
 
     if (reviewId) {
-      try {
-        await supabase.from('reviews').delete().eq('id', reviewId)
-      } catch (cleanupError) {
-        console.error(cleanupError)
-      }
+      await supabase.from('reviews').delete().eq('id', reviewId)
     }
 
     throw error
@@ -504,14 +430,7 @@ export async function fetchReviewablePaymentRequests() {
     return []
   }
 
-  const { data, error } = await safeSupabase(
-    () => supabase.rpc('get_reviewable_payment_requests'),
-    {
-      timeoutMs: 8000,
-      retries: 1,
-      timeoutMessage: 'Покупки для отзывов загружаются слишком долго',
-    }
-  )
+  const { data, error } = await supabase.rpc('get_reviewable_payment_requests')
 
   if (error) {
     throw new Error(error.message || 'Не удалось загрузить покупки для отзывов')
@@ -525,22 +444,14 @@ export async function fetchPublishedReviews(limit = 24) {
     return []
   }
 
-  const { data, error } = await safeSupabase(
-    () =>
-      supabase
-        .from('reviews')
-        .select(
-          'id, user_id, username, avatar_path, avatar_shape, rating, review_text, status, created_at, review_images(id, image_path, sort_order, created_at)'
-        )
-        .eq('status', 'published')
-        .order('created_at', { ascending: false })
-        .limit(limit),
-    {
-      timeoutMs: 8000,
-      retries: 1,
-      timeoutMessage: 'Отзывы загружаются слишком долго',
-    }
-  )
+  const { data, error } = await supabase
+    .from('reviews')
+    .select(
+      'id, user_id, username, avatar_path, avatar_shape, rating, review_text, status, created_at, review_images(id, image_path, sort_order, created_at)'
+    )
+    .eq('status', 'published')
+    .order('created_at', { ascending: false })
+    .limit(limit)
 
   if (error) {
     throw new Error(error.message || 'Не удалось загрузить отзывы')
@@ -554,20 +465,12 @@ export async function fetchMyReviews() {
     return []
   }
 
-  const { data, error } = await safeSupabase(
-    () =>
-      supabase
-        .from('reviews')
-        .select(
-          'id, user_id, payment_request_id, username, avatar_path, avatar_shape, rating, review_text, status, admin_comment, created_at, updated_at, review_images(id, image_path, sort_order, created_at)'
-        )
-        .order('created_at', { ascending: false }),
-    {
-      timeoutMs: 8000,
-      retries: 1,
-      timeoutMessage: 'Ваши отзывы загружаются слишком долго',
-    }
-  )
+  const { data, error } = await supabase
+    .from('reviews')
+    .select(
+      'id, user_id, payment_request_id, username, avatar_path, avatar_shape, rating, review_text, status, admin_comment, created_at, updated_at, review_images(id, image_path, sort_order, created_at)'
+    )
+    .order('created_at', { ascending: false })
 
   if (error) {
     throw new Error(error.message || 'Не удалось загрузить ваши отзывы')
@@ -581,21 +484,13 @@ export async function fetchAllReviewsForAdmin() {
     return []
   }
 
-  const { data, error } = await safeSupabase(
-    () =>
-      supabase
-        .from('reviews')
-        .select(
-          'id, user_id, payment_request_id, username, avatar_path, avatar_shape, rating, review_text, status, admin_comment, created_at, updated_at, review_images(id, image_path, sort_order, created_at)'
-        )
-        .neq('status', 'deleted')
-        .order('created_at', { ascending: false }),
-    {
-      timeoutMs: 9000,
-      retries: 1,
-      timeoutMessage: 'Отзывы для администратора загружаются слишком долго',
-    }
-  )
+  const { data, error } = await supabase
+    .from('reviews')
+    .select(
+      'id, user_id, payment_request_id, username, avatar_path, avatar_shape, rating, review_text, status, admin_comment, created_at, updated_at, review_images(id, image_path, sort_order, created_at)'
+    )
+    .neq('status', 'deleted')
+    .order('created_at', { ascending: false })
 
   if (error) {
     throw new Error(error.message || 'Не удалось загрузить отзывы')
@@ -609,25 +504,17 @@ export async function setReviewStatus(reviewId, status, adminComment = null) {
     throw new Error('Supabase не подключён')
   }
 
-  const { data, error } = await safeSupabase(
-    () =>
-      supabase
-        .from('reviews')
-        .update({
-          status,
-          admin_comment: adminComment ? String(adminComment).trim() : null,
-        })
-        .eq('id', reviewId)
-        .select(
-          'id, user_id, payment_request_id, username, avatar_path, avatar_shape, rating, review_text, status, admin_comment, created_at, updated_at, review_images(id, image_path, sort_order, created_at)'
-        )
-        .single(),
-    {
-      timeoutMs: 8000,
-      retries: 0,
-      timeoutMessage: 'Обновление статуса отзыва идёт слишком долго',
-    }
-  )
+  const { data, error } = await supabase
+    .from('reviews')
+    .update({
+      status,
+      admin_comment: adminComment ? String(adminComment).trim() : null,
+    })
+    .eq('id', reviewId)
+    .select(
+      'id, user_id, payment_request_id, username, avatar_path, avatar_shape, rating, review_text, status, admin_comment, created_at, updated_at, review_images(id, image_path, sort_order, created_at)'
+    )
+    .single()
 
   if (error || !data) {
     throw new Error(error?.message || 'Не удалось обновить статус отзыва')
@@ -649,19 +536,11 @@ export async function deleteReview(reviewId) {
     throw new Error('Supabase не подключён')
   }
 
-  const { data: reviewData, error: reviewLoadError } = await safeSupabase(
-    () =>
-      supabase
-        .from('reviews')
-        .select('id, review_images(image_path)')
-        .eq('id', reviewId)
-        .single(),
-    {
-      timeoutMs: 8000,
-      retries: 0,
-      timeoutMessage: 'Удаление отзыва идёт слишком долго',
-    }
-  )
+  const { data: reviewData, error: reviewLoadError } = await supabase
+    .from('reviews')
+    .select('id, review_images(image_path)')
+    .eq('id', reviewId)
+    .single()
 
   if (reviewLoadError || !reviewData) {
     throw new Error(reviewLoadError?.message || 'Не удалось найти отзыв')
@@ -671,18 +550,10 @@ export async function deleteReview(reviewId) {
     ? reviewData.review_images.map((item) => item.image_path).filter(Boolean)
     : []
 
-  const { error: deleteError } = await safeSupabase(
-    () =>
-      supabase
-        .from('reviews')
-        .delete()
-        .eq('id', reviewId),
-    {
-      timeoutMs: 8000,
-      retries: 0,
-      timeoutMessage: 'Удаление отзыва идёт слишком долго',
-    }
-  )
+  const { error: deleteError } = await supabase
+    .from('reviews')
+    .delete()
+    .eq('id', reviewId)
 
   if (deleteError) {
     throw new Error(deleteError.message || 'Не удалось удалить отзыв')
@@ -704,14 +575,7 @@ export async function fetchReviewsStats() {
     }
   }
 
-  const { data, error } = await safeSupabase(
-    () => supabase.rpc('get_reviews_stats'),
-    {
-      timeoutMs: 8000,
-      retries: 1,
-      timeoutMessage: 'Статистика отзывов загружается слишком долго',
-    }
-  )
+  const { data, error } = await supabase.rpc('get_reviews_stats')
 
   if (error) {
     throw new Error(error.message || 'Не удалось загрузить статистику отзывов')
