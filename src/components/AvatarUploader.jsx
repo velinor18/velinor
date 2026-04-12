@@ -9,6 +9,11 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
 }
 
+function normalizeRotation(rotation) {
+  const normalized = rotation % 360
+  return normalized < 0 ? normalized + 360 : normalized
+}
+
 function shapePreviewClass(shape) {
   if (shape === 'circle') return 'rounded-full'
   if (shape === 'rounded') return 'rounded-[28%]'
@@ -67,15 +72,39 @@ function getBaseScale(width, height) {
   return Math.max(VIEWPORT_SIZE / width, VIEWPORT_SIZE / height)
 }
 
-function getBounds(width, height, scale) {
-  const displayWidth = width * scale
-  const displayHeight = height * scale
+function getDisplayDimensions(width, height, scale, rotation) {
+  const safeRotation = normalizeRotation(rotation)
+  const isQuarterTurn = safeRotation === 90 || safeRotation === 270
+
+  const logicalWidth = isQuarterTurn ? height : width
+  const logicalHeight = isQuarterTurn ? width : height
+
+  return {
+    displayWidth: logicalWidth * scale,
+    displayHeight: logicalHeight * scale,
+  }
+}
+
+function getBounds(width, height, scale, rotation) {
+  const { displayWidth, displayHeight } = getDisplayDimensions(
+    width,
+    height,
+    scale,
+    rotation
+  )
 
   return {
     maxX: Math.max(0, (displayWidth - VIEWPORT_SIZE) / 2),
     maxY: Math.max(0, (displayHeight - VIEWPORT_SIZE) / 2),
     displayWidth,
     displayHeight,
+  }
+}
+
+function clampOffset(offset, bounds) {
+  return {
+    x: clamp(offset.x, -bounds.maxX, bounds.maxX),
+    y: clamp(offset.y, -bounds.maxY, bounds.maxY),
   }
 }
 
@@ -87,13 +116,17 @@ function AvatarCropModal({
   onSubmit,
 }) {
   const [zoom, setZoom] = useState(1)
+  const [rotation, setRotation] = useState(0)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [localError, setLocalError] = useState('')
   const dragStateRef = useRef(null)
 
   useEffect(() => {
     if (!open) return
     setZoom(1)
+    setRotation(0)
     setOffset({ x: 0, y: 0 })
+    setLocalError('')
   }, [open, imageState?.src])
 
   useEffect(() => {
@@ -101,13 +134,15 @@ function AvatarCropModal({
 
     const baseScale = getBaseScale(imageState.width, imageState.height)
     const scale = baseScale * zoom
-    const bounds = getBounds(imageState.width, imageState.height, scale)
+    const bounds = getBounds(
+      imageState.width,
+      imageState.height,
+      scale,
+      rotation
+    )
 
-    setOffset((prev) => ({
-      x: clamp(prev.x, -bounds.maxX, bounds.maxX),
-      y: clamp(prev.y, -bounds.maxY, bounds.maxY),
-    }))
-  }, [zoom, open, imageState])
+    setOffset((prev) => clampOffset(prev, bounds))
+  }, [zoom, rotation, open, imageState])
 
   useEffect(() => {
     if (!open) return
@@ -121,12 +156,22 @@ function AvatarCropModal({
 
       const baseScale = getBaseScale(imageState.width, imageState.height)
       const scale = baseScale * zoom
-      const bounds = getBounds(imageState.width, imageState.height, scale)
+      const bounds = getBounds(
+        imageState.width,
+        imageState.height,
+        scale,
+        rotation
+      )
 
-      setOffset({
-        x: clamp(nextX, -bounds.maxX, bounds.maxX),
-        y: clamp(nextY, -bounds.maxY, bounds.maxY),
-      })
+      setOffset(
+        clampOffset(
+          {
+            x: nextX,
+            y: nextY,
+          },
+          bounds
+        )
+      )
     }
 
     function handlePointerUp() {
@@ -140,65 +185,154 @@ function AvatarCropModal({
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
     }
-  }, [open, imageState, zoom])
+  }, [open, imageState, zoom, rotation])
 
-  const previewStyle = useMemo(() => {
+  function updateZoom(nextZoom) {
+    if (!imageState) {
+      setZoom(nextZoom)
+      return
+    }
+
+    const safeNextZoom = clamp(nextZoom, 1, 3)
+    const baseScale = getBaseScale(imageState.width, imageState.height)
+    const currentScale = baseScale * zoom
+    const nextScale = baseScale * safeNextZoom
+    const ratio = nextScale / currentScale
+
+    const nextBounds = getBounds(
+      imageState.width,
+      imageState.height,
+      nextScale,
+      rotation
+    )
+
+    setOffset((prev) =>
+      clampOffset(
+        {
+          x: prev.x * ratio,
+          y: prev.y * ratio,
+        },
+        nextBounds
+      )
+    )
+
+    setZoom(safeNextZoom)
+  }
+
+  function rotateLeft() {
+    if (!imageState) return
+
+    const nextRotation = normalizeRotation(rotation - 90)
+    const baseScale = getBaseScale(imageState.width, imageState.height)
+    const scale = baseScale * zoom
+    const nextBounds = getBounds(
+      imageState.width,
+      imageState.height,
+      scale,
+      nextRotation
+    )
+
+    setRotation(nextRotation)
+    setOffset((prev) => clampOffset(prev, nextBounds))
+  }
+
+  function rotateRight() {
+    if (!imageState) return
+
+    const nextRotation = normalizeRotation(rotation + 90)
+    const baseScale = getBaseScale(imageState.width, imageState.height)
+    const scale = baseScale * zoom
+    const nextBounds = getBounds(
+      imageState.width,
+      imageState.height,
+      scale,
+      nextRotation
+    )
+
+    setRotation(nextRotation)
+    setOffset((prev) => clampOffset(prev, nextBounds))
+  }
+
+  const previewWrapperStyle = useMemo(() => {
+    return {
+      left: '50%',
+      top: '50%',
+      transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px))`,
+    }
+  }, [offset])
+
+  const previewImageStyle = useMemo(() => {
     if (!imageState) return {}
 
     const baseScale = getBaseScale(imageState.width, imageState.height)
-    const scale = baseScale * zoom
-    const displayWidth = imageState.width * scale
-    const displayHeight = imageState.height * scale
-    const left = (VIEWPORT_SIZE - displayWidth) / 2 + offset.x
-    const top = (VIEWPORT_SIZE - displayHeight) / 2 + offset.y
+    const totalScale = baseScale * zoom
 
     return {
-      width: `${displayWidth}px`,
-      height: `${displayHeight}px`,
-      left: `${left}px`,
-      top: `${top}px`,
+      width: `${imageState.width}px`,
+      height: `${imageState.height}px`,
+      transform: `rotate(${rotation}deg) scale(${totalScale})`,
+      transformOrigin: 'center center',
     }
-  }, [imageState, zoom, offset])
+  }, [imageState, zoom, rotation])
 
   async function handleSave() {
     if (!imageState) return
 
-    const img = await new Promise((resolve, reject) => {
-      const image = new Image()
-      image.onload = () => resolve(image)
-      image.onerror = reject
-      image.src = imageState.src
-    })
+    try {
+      setLocalError('')
 
-    const baseScale = getBaseScale(imageState.width, imageState.height)
-    const scale = baseScale * zoom
-    const displayWidth = imageState.width * scale
-    const displayHeight = imageState.height * scale
-    const left = (VIEWPORT_SIZE - displayWidth) / 2 + offset.x
-    const top = (VIEWPORT_SIZE - displayHeight) / 2 + offset.y
-    const factor = OUTPUT_SIZE / VIEWPORT_SIZE
+      const img = await new Promise((resolve, reject) => {
+        const image = new Image()
+        image.onload = () => resolve(image)
+        image.onerror = reject
+        image.src = imageState.src
+      })
 
-    const canvas = document.createElement('canvas')
-    canvas.width = OUTPUT_SIZE
-    canvas.height = OUTPUT_SIZE
+      const baseScale = getBaseScale(imageState.width, imageState.height)
+      const totalScale = baseScale * zoom
+      const factor = OUTPUT_SIZE / VIEWPORT_SIZE
+      const safeRotation = normalizeRotation(rotation)
 
-    const context = canvas.getContext('2d')
-    if (!context) return
+      const canvas = document.createElement('canvas')
+      canvas.width = OUTPUT_SIZE
+      canvas.height = OUTPUT_SIZE
 
-    context.drawImage(
-      img,
-      left * factor,
-      top * factor,
-      displayWidth * factor,
-      displayHeight * factor
-    )
+      const context = canvas.getContext('2d')
+      if (!context) {
+        setLocalError('Не удалось подготовить изображение')
+        return
+      }
 
-    const blob = await new Promise((resolve) => {
-      canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png', 1)
-    })
+      context.clearRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE)
+      context.translate(
+        OUTPUT_SIZE / 2 + offset.x * factor,
+        OUTPUT_SIZE / 2 + offset.y * factor
+      )
+      context.rotate((safeRotation * Math.PI) / 180)
+      context.scale(totalScale * factor, totalScale * factor)
 
-    if (!blob) return
-    await onSubmit(blob)
+      context.drawImage(
+        img,
+        -imageState.width / 2,
+        -imageState.height / 2,
+        imageState.width,
+        imageState.height
+      )
+
+      const blob = await new Promise((resolve) => {
+        canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png', 1)
+      })
+
+      if (!blob) {
+        setLocalError('Не удалось сохранить изображение')
+        return
+      }
+
+      await onSubmit(blob)
+    } catch (error) {
+      console.error(error)
+      setLocalError('Не удалось обработать изображение')
+    }
   }
 
   if (!open || !imageState) return null
@@ -213,8 +347,13 @@ function AvatarCropModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-fuchsia-500/15 px-6 py-5">
-          <div className="text-2xl font-black text-white">
-            Редактирование аватара
+          <div>
+            <div className="text-2xl font-black text-white">
+              Редактирование аватара
+            </div>
+            <div className="mt-1 text-sm text-zinc-400">
+              Перетаскивай изображение, меняй масштаб и при необходимости поворачивай его.
+            </div>
           </div>
 
           <button
@@ -227,26 +366,61 @@ function AvatarCropModal({
 
         <div className="space-y-6 p-6">
           <div className="mx-auto w-full max-w-[320px]">
-            <div className="relative mx-auto h-[320px] w-[320px] overflow-hidden rounded-[28px] border border-fuchsia-500/20 bg-black">
-              <img
-                src={imageState.src}
-                alt="Предпросмотр аватара"
-                draggable={false}
-                onPointerDown={(event) => {
-                  dragStateRef.current = {
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    startOffsetX: offset.x,
-                    startOffsetY: offset.y,
-                  }
-                }}
-                className="absolute select-none object-cover"
-                style={previewStyle}
-              />
+            <div
+              className="relative mx-auto h-[320px] w-[320px] overflow-hidden rounded-[28px] border border-fuchsia-500/20 bg-black"
+              onWheel={(event) => {
+                event.preventDefault()
+                const direction = event.deltaY > 0 ? -0.12 : 0.12
+                updateZoom(zoom + direction)
+              }}
+              style={{ touchAction: 'none' }}
+            >
+              <div
+                className="absolute"
+                style={previewWrapperStyle}
+              >
+                <img
+                  src={imageState.src}
+                  alt="Предпросмотр аватара"
+                  draggable={false}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return
+
+                    dragStateRef.current = {
+                      startX: event.clientX,
+                      startY: event.clientY,
+                      startOffsetX: offset.x,
+                      startOffsetY: offset.y,
+                    }
+                  }}
+                  className="pointer-events-auto select-none"
+                  style={previewImageStyle}
+                />
+              </div>
 
               <div className="pointer-events-none absolute inset-0 border border-white/10" />
               <div className="pointer-events-none absolute inset-[14px] rounded-[20px] border border-fuchsia-400/30" />
             </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={rotateLeft}
+              disabled={saving}
+              className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+            >
+              Повернуть влево
+            </button>
+
+            <button
+              type="button"
+              onClick={rotateRight}
+              disabled={saving}
+              className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+            >
+              Повернуть вправо
+            </button>
           </div>
 
           <div>
@@ -260,10 +434,20 @@ function AvatarCropModal({
               max="3"
               step="0.01"
               value={zoom}
-              onChange={(e) => setZoom(Number(e.target.value))}
+              onChange={(e) => updateZoom(Number(e.target.value))}
               className="w-full accent-fuchsia-500"
             />
+
+            <div className="mt-3 text-sm text-zinc-500">
+              На компьютере можно масштабировать колесом мыши.
+            </div>
           </div>
+
+          {localError ? (
+            <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              {localError}
+            </div>
+          ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <button
