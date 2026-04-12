@@ -127,6 +127,7 @@ function AvatarCropModal({
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [localError, setLocalError] = useState('')
   const dragStateRef = useRef(null)
+  const viewportRef = useRef(null)
 
   useEffect(() => {
     if (!open) return
@@ -193,6 +194,47 @@ function AvatarCropModal({
       window.removeEventListener('pointerup', handlePointerUp)
     }
   }, [open, imageState, zoom, rotation])
+
+  useEffect(() => {
+    if (!open) return
+
+    const originalHtmlOverflow = document.documentElement.style.overflow
+    const originalBodyOverflow = document.body.style.overflow
+    const originalBodyOverscroll = document.body.style.overscrollBehavior
+    const originalBodyTouchAction = document.body.style.touchAction
+
+    document.documentElement.style.overflow = 'hidden'
+    document.body.style.overflow = 'hidden'
+    document.body.style.overscrollBehavior = 'contain'
+    document.body.style.touchAction = 'none'
+
+    return () => {
+      document.documentElement.style.overflow = originalHtmlOverflow
+      document.body.style.overflow = originalBodyOverflow
+      document.body.style.overscrollBehavior = originalBodyOverscroll
+      document.body.style.touchAction = originalBodyTouchAction
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !viewportRef.current) return
+
+    const element = viewportRef.current
+
+    function handleNativeWheel(event) {
+      event.preventDefault()
+      event.stopPropagation()
+
+      const direction = event.deltaY > 0 ? -0.12 : 0.12
+      updateZoom(zoom + direction)
+    }
+
+    element.addEventListener('wheel', handleNativeWheel, { passive: false })
+
+    return () => {
+      element.removeEventListener('wheel', handleNativeWheel)
+    }
+  }, [open, zoom, imageState, rotation])
 
   function updateZoom(nextZoom) {
     if (!imageState) {
@@ -370,121 +412,123 @@ function AvatarCropModal({
 
   return (
     <div
-      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/80 p-2 sm:p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-[28px] border border-fuchsia-500/20 bg-[#0b0b18] shadow-[0_0_80px_rgba(168,85,247,0.18)]"
+        className="flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-[24px] border border-fuchsia-500/20 bg-[#0b0b18] shadow-[0_0_80px_rgba(168,85,247,0.18)] sm:rounded-[28px]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-fuchsia-500/15 px-6 py-5">
-          <div>
-            <div className="text-2xl font-black text-white">
-              Редактирование аватара
+        <div className="shrink-0 border-b border-fuchsia-500/15 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-xl font-black text-white sm:text-2xl">
+                Редактирование аватара
+              </div>
+              <div className="mt-1 text-xs leading-5 text-zinc-400 sm:text-sm">
+                Перетаскивай изображение, меняй масштаб и поворачивай его при необходимости.
+              </div>
             </div>
-            <div className="mt-1 text-sm text-zinc-400">
-              Перетаскивай изображение, меняй масштаб и при необходимости поворачивай его.
-            </div>
-          </div>
 
-          <button
-            onClick={onClose}
-            className="rounded-xl border border-fuchsia-500/15 bg-white/5 px-3 py-2 text-zinc-300 transition hover:border-fuchsia-400/40 hover:text-white"
-          >
-            ✕
-          </button>
+            <button
+              onClick={onClose}
+              className="shrink-0 rounded-xl border border-fuchsia-500/15 bg-white/5 px-3 py-2 text-zinc-300 transition hover:border-fuchsia-400/40 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-6 p-6">
-          <div className="mx-auto w-full max-w-[320px]">
-            <div
-              className="relative mx-auto h-[320px] w-[320px] overflow-hidden rounded-[28px] border border-fuchsia-500/20 bg-black"
-              onWheel={(event) => {
-                event.preventDefault()
-                const direction = event.deltaY > 0 ? -0.12 : 0.12
-                updateZoom(zoom + direction)
-              }}
-              style={{ touchAction: 'none' }}
-            >
+        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+          <div className="space-y-5">
+            <div className="mx-auto w-full max-w-[320px]">
               <div
-                className="absolute"
-                style={previewWrapperStyle}
+                ref={viewportRef}
+                className="relative mx-auto aspect-square w-full overflow-hidden rounded-[24px] border border-fuchsia-500/20 bg-black sm:rounded-[28px]"
+                style={{ touchAction: 'none' }}
               >
-                <img
-                  src={imageState.src}
-                  alt="Предпросмотр аватара"
-                  draggable={false}
-                  onPointerDown={(event) => {
-                    if (event.button !== 0) return
+                <div
+                  className="absolute"
+                  style={previewWrapperStyle}
+                >
+                  <img
+                    src={imageState.src}
+                    alt="Предпросмотр аватара"
+                    draggable={false}
+                    onPointerDown={(event) => {
+                      if (event.button !== 0) return
 
-                    dragStateRef.current = {
-                      startX: event.clientX,
-                      startY: event.clientY,
-                      startOffsetX: offset.x,
-                      startOffsetY: offset.y,
-                    }
-                  }}
-                  className="absolute pointer-events-auto select-none"
-                  style={previewImageStyle}
-                />
+                      dragStateRef.current = {
+                        startX: event.clientX,
+                        startY: event.clientY,
+                        startOffsetX: offset.x,
+                        startOffsetY: offset.y,
+                      }
+                    }}
+                    className="absolute pointer-events-auto select-none"
+                    style={previewImageStyle}
+                  />
+                </div>
+
+                <div className="pointer-events-none absolute inset-0 border border-white/10" />
+                <div className="pointer-events-none absolute inset-[12px] rounded-[18px] border border-fuchsia-400/30 sm:inset-[14px] sm:rounded-[20px]" />
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={rotateLeft}
+                disabled={saving}
+                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+              >
+                Повернуть влево
+              </button>
+
+              <button
+                type="button"
+                onClick={rotateRight}
+                disabled={saving}
+                className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+              >
+                Повернуть вправо
+              </button>
+            </div>
+
+            <div>
+              <div className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-400">
+                Масштаб
               </div>
 
-              <div className="pointer-events-none absolute inset-0 border border-white/10" />
-              <div className="pointer-events-none absolute inset-[14px] rounded-[20px] border border-fuchsia-400/30" />
+              <input
+                type="range"
+                min="1"
+                max="3"
+                step="0.01"
+                value={zoom}
+                onChange={(e) => updateZoom(Number(e.target.value))}
+                className="w-full accent-fuchsia-500"
+              />
+
+              <div className="mt-3 text-xs leading-5 text-zinc-500 sm:text-sm">
+                На компьютере можно масштабировать колесом мыши.
+              </div>
             </div>
+
+            {localError ? (
+              <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                {localError}
+              </div>
+            ) : null}
           </div>
+        </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={rotateLeft}
-              disabled={saving}
-              className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
-            >
-              Повернуть влево
-            </button>
-
-            <button
-              type="button"
-              onClick={rotateRight}
-              disabled={saving}
-              className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
-            >
-              Повернуть вправо
-            </button>
-          </div>
-
-          <div>
-            <div className="mb-3 text-sm font-bold uppercase tracking-wide text-zinc-400">
-              Масштаб
-            </div>
-
-            <input
-              type="range"
-              min="1"
-              max="3"
-              step="0.01"
-              value={zoom}
-              onChange={(e) => updateZoom(Number(e.target.value))}
-              className="w-full accent-fuchsia-500"
-            />
-
-            <div className="mt-3 text-sm text-zinc-500">
-              На компьютере можно масштабировать колесом мыши.
-            </div>
-          </div>
-
-          {localError ? (
-            <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-              {localError}
-            </div>
-          ) : null}
-
+        <div className="shrink-0 border-t border-fuchsia-500/15 px-4 py-4 sm:px-6">
           <div className="grid gap-3 sm:grid-cols-2">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-2xl border border-white/10 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
+              className="rounded-2xl border border-white/10 px-5 py-3.5 text-sm font-extrabold uppercase tracking-wide text-zinc-200 transition hover:bg-white/5"
             >
               Отмена
             </button>
@@ -493,7 +537,7 @@ function AvatarCropModal({
               type="button"
               onClick={handleSave}
               disabled={saving}
-              className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
+              className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-3.5 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01] disabled:opacity-60"
             >
               {saving ? 'Сохраняем...' : 'Сохранить'}
             </button>
