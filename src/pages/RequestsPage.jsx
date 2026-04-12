@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
-import { readDataCache, safeSupabase, writeDataCache } from '../lib/asyncData'
 
 const PAYMENT_REJECTION_OPTIONS = [
   { value: 'wrong_image', label: 'Загружено не то изображение' },
@@ -13,8 +12,6 @@ const PAYMENT_REJECTION_OPTIONS = [
   { value: 'duplicate_request', label: 'Дубликат заявки' },
   { value: 'other', label: 'Другая причина' },
 ]
-
-const REQUESTS_CACHE_KEY = 'admin_requests_v2'
 
 function generatePromoCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -30,6 +27,12 @@ function getRejectionReasonLabel(reasonCode) {
     PAYMENT_REJECTION_OPTIONS.find((item) => item.value === reasonCode)?.label ||
     'Причина не указана'
   )
+}
+
+function getStatusLabel(status) {
+  if (status === 'approved') return 'Успешно оплачено'
+  if (status === 'rejected') return 'Отклонено'
+  return 'На проверке'
 }
 
 function ImagePreviewModal({ item, loading, onClose }) {
@@ -192,98 +195,60 @@ function RejectPaymentModal({
   )
 }
 
-function getStatusLabel(status) {
-  if (status === 'approved') return 'Успешно оплачено'
-  if (status === 'rejected') return 'Отклонено'
-  return 'На проверке'
+function StatusBadge({ status }) {
+  const className =
+    status === 'approved'
+      ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+      : status === 'rejected'
+        ? 'border-red-400/20 bg-red-500/10 text-red-100'
+        : 'border-yellow-400/20 bg-yellow-500/10 text-yellow-100'
+
+  return (
+    <div className={`inline-flex rounded-full border px-3 py-2 text-xs font-bold uppercase tracking-wide ${className}`}>
+      {getStatusLabel(status)}
+    </div>
+  )
 }
 
 export default function RequestsPage() {
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)
-  const [reloading, setReloading] = useState(false)
   const [selectedRequest, setSelectedRequest] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [processingId, setProcessingId] = useState(null)
   const [requestsTab, setRequestsTab] = useState('pending')
   const [clearingArchive, setClearingArchive] = useState(false)
-  const [toast, setToast] = useState('')
-  const [errorText, setErrorText] = useState('')
 
   const [rejectModalOpen, setRejectModalOpen] = useState(false)
   const [rejectTarget, setRejectTarget] = useState(null)
   const [rejectReasonCode, setRejectReasonCode] = useState('wrong_image')
   const [rejectComment, setRejectComment] = useState('')
 
-  useEffect(() => {
-    if (!toast) return
-    const timer = setTimeout(() => setToast(''), 2600)
-    return () => clearTimeout(timer)
-  }, [toast])
-
-  useEffect(() => {
-    if (!errorText) return
-    const timer = setTimeout(() => setErrorText(''), 3600)
-    return () => clearTimeout(timer)
-  }, [errorText])
-
-  const loadRequests = async ({ silent = false } = {}) => {
+  const loadRequests = async () => {
     if (!supabase) {
       setLoading(false)
-      setReloading(false)
-      setErrorText('Supabase не подключён')
       return
     }
 
-    const cachedRequests = readDataCache(REQUESTS_CACHE_KEY, 60 * 1000)
+    setLoading(true)
 
-    if (cachedRequests?.length && !silent) {
-      setRequests(cachedRequests)
-      setLoading(false)
-    }
-
-    if (silent) {
-      setReloading(true)
-    } else if (!cachedRequests?.length) {
-      setLoading(true)
-    }
-
-    try {
-      const { data, error } = await safeSupabase(
-        () =>
-          supabase
-            .from('payment_requests')
-            .select(
-              'id, user_id, username, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden, rejection_reason_code, admin_comment'
-            )
-            .eq('admin_hidden', false)
-            .order('created_at', { ascending: false }),
-        {
-          timeoutMs: 8000,
-          retries: 1,
-          timeoutMessage: 'Заявки загружаются слишком долго',
-        }
+    const { data, error } = await supabase
+      .from('payment_requests')
+      .select(
+        'id, user_id, username, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden, rejection_reason_code, admin_comment'
       )
+      .eq('admin_hidden', false)
+      .order('created_at', { ascending: false })
 
-      if (error) {
-        throw error
-      }
-
-      const nextRequests = data ?? []
-      setRequests(nextRequests)
-      writeDataCache(REQUESTS_CACHE_KEY, nextRequests)
-    } catch (error) {
+    if (error) {
       console.error(error)
-
-      if (!cachedRequests?.length) {
-        setRequests([])
-      }
-
-      setErrorText(error.message || 'Не удалось загрузить заявки')
-    } finally {
+      setRequests([])
       setLoading(false)
-      setReloading(false)
+      return
     }
+
+    setRequests(data ?? [])
+    setLoading(false)
   }
 
   useEffect(() => {
@@ -310,27 +275,13 @@ export default function RequestsPage() {
       imageUrl: null,
     })
 
-    try {
-      const imageUrl = await downloadPrivateImageAsObjectUrl(item.image_path)
+    const imageUrl = await downloadPrivateImageAsObjectUrl(item.image_path)
 
-      setSelectedRequest({
-        ...item,
-        imageUrl: imageUrl || null,
-      })
-
-      if (!imageUrl) {
-        setErrorText('Не удалось получить изображение скриншота')
-      }
-    } catch (error) {
-      console.error(error)
-      setSelectedRequest({
-        ...item,
-        imageUrl: null,
-      })
-      setErrorText('Не удалось загрузить изображение')
-    } finally {
-      setPreviewLoading(false)
-    }
+    setSelectedRequest({
+      ...item,
+      imageUrl,
+    })
+    setPreviewLoading(false)
   }
 
   const openRejectModal = (item) => {
@@ -354,56 +305,42 @@ export default function RequestsPage() {
     const code = item.promo_code || generatePromoCode()
     const reviewedAt = new Date().toISOString()
     setProcessingId(item.id)
-    setErrorText('')
 
-    try {
-      const { error } = await safeSupabase(
-        () =>
-          supabase
-            .from('payment_requests')
-            .update({
+    const { error } = await supabase
+      .from('payment_requests')
+      .update({
+        status: 'approved',
+        promo_code: code,
+        reviewed_at: reviewedAt,
+        rejection_reason_code: null,
+        admin_comment: null,
+        admin_hidden: false,
+      })
+      .eq('id', item.id)
+
+    if (error) {
+      console.error(error)
+      setProcessingId(null)
+      return
+    }
+
+    setRequests((prev) =>
+      prev.map((request) =>
+        request.id === item.id
+          ? {
+              ...request,
               status: 'approved',
               promo_code: code,
               reviewed_at: reviewedAt,
               rejection_reason_code: null,
               admin_comment: null,
               admin_hidden: false,
-            })
-            .eq('id', item.id),
-        {
-          timeoutMs: 8000,
-          retries: 0,
-          timeoutMessage: 'Подтверждение оплаты идёт слишком долго',
-        }
+            }
+          : request
       )
+    )
 
-      if (error) {
-        throw error
-      }
-
-      setRequests((prev) =>
-        prev.map((request) =>
-          request.id === item.id
-            ? {
-                ...request,
-                status: 'approved',
-                promo_code: code,
-                reviewed_at: reviewedAt,
-                rejection_reason_code: null,
-                admin_comment: null,
-                admin_hidden: false,
-              }
-            : request
-        )
-      )
-
-      setToast('Оплата подтверждена')
-    } catch (error) {
-      console.error(error)
-      setErrorText(error.message || 'Не удалось подтвердить оплату')
-    } finally {
-      setProcessingId(null)
-    }
+    setProcessingId(null)
   }
 
   const confirmRejectPayment = async () => {
@@ -411,113 +348,85 @@ export default function RequestsPage() {
 
     const reviewedAt = new Date().toISOString()
     setProcessingId(rejectTarget.id)
-    setErrorText('')
 
-    try {
-      const { error } = await safeSupabase(
-        () =>
-          supabase
-            .from('payment_requests')
-            .update({
+    const { error } = await supabase
+      .from('payment_requests')
+      .update({
+        status: 'rejected',
+        promo_code: null,
+        reviewed_at: reviewedAt,
+        rejection_reason_code: rejectReasonCode,
+        admin_comment: rejectComment.trim() || null,
+        admin_hidden: false,
+      })
+      .eq('id', rejectTarget.id)
+
+    if (error) {
+      console.error(error)
+      setProcessingId(null)
+      return
+    }
+
+    setRequests((prev) =>
+      prev.map((request) =>
+        request.id === rejectTarget.id
+          ? {
+              ...request,
               status: 'rejected',
               promo_code: null,
               reviewed_at: reviewedAt,
               rejection_reason_code: rejectReasonCode,
               admin_comment: rejectComment.trim() || null,
               admin_hidden: false,
-            })
-            .eq('id', rejectTarget.id),
-        {
-          timeoutMs: 8000,
-          retries: 0,
-          timeoutMessage: 'Отклонение заявки идёт слишком долго',
-        }
+            }
+          : request
       )
+    )
 
-      if (error) {
-        throw error
-      }
-
-      setRequests((prev) =>
-        prev.map((request) =>
-          request.id === rejectTarget.id
-            ? {
-                ...request,
-                status: 'rejected',
-                promo_code: null,
-                reviewed_at: reviewedAt,
-                rejection_reason_code: rejectReasonCode,
-                admin_comment: rejectComment.trim() || null,
-                admin_hidden: false,
-              }
-            : request
-        )
-      )
-
-      setToast('Заявка отклонена')
-      closeRejectModal()
-    } catch (error) {
-      console.error(error)
-      setErrorText(error.message || 'Не удалось отклонить заявку')
-    } finally {
-      setProcessingId(null)
-    }
+    setProcessingId(null)
+    closeRejectModal()
   }
 
   const restoreToPending = async (item) => {
     if (!supabase) return
 
     setProcessingId(item.id)
-    setErrorText('')
 
-    try {
-      const { error } = await safeSupabase(
-        () =>
-          supabase
-            .from('payment_requests')
-            .update({
+    const { error } = await supabase
+      .from('payment_requests')
+      .update({
+        status: 'pending',
+        promo_code: null,
+        reviewed_at: null,
+        rejection_reason_code: null,
+        admin_comment: null,
+        admin_hidden: false,
+      })
+      .eq('id', item.id)
+
+    if (error) {
+      console.error(error)
+      setProcessingId(null)
+      return
+    }
+
+    setRequests((prev) =>
+      prev.map((request) =>
+        request.id === item.id
+          ? {
+              ...request,
               status: 'pending',
               promo_code: null,
               reviewed_at: null,
               rejection_reason_code: null,
               admin_comment: null,
               admin_hidden: false,
-            })
-            .eq('id', item.id),
-        {
-          timeoutMs: 8000,
-          retries: 0,
-          timeoutMessage: 'Возврат заявки на проверку идёт слишком долго',
-        }
+            }
+          : request
       )
+    )
 
-      if (error) {
-        throw error
-      }
-
-      setRequests((prev) =>
-        prev.map((request) =>
-          request.id === item.id
-            ? {
-                ...request,
-                status: 'pending',
-                promo_code: null,
-                reviewed_at: null,
-                rejection_reason_code: null,
-                admin_comment: null,
-                admin_hidden: false,
-              }
-            : request
-        )
-      )
-
-      setToast('Заявка возвращена на проверку')
-    } catch (error) {
-      console.error(error)
-      setErrorText(error.message || 'Не удалось вернуть заявку на проверку')
-    } finally {
-      setProcessingId(null)
-    }
+    setProcessingId(null)
   }
 
   const hideArchivedRequestForAdmin = async (item) => {
@@ -529,36 +438,22 @@ export default function RequestsPage() {
     if (!confirmed) return
 
     setProcessingId(item.id)
-    setErrorText('')
 
-    try {
-      const { error } = await safeSupabase(
-        () =>
-          supabase
-            .from('payment_requests')
-            .update({
-              admin_hidden: true,
-            })
-            .eq('id', item.id),
-        {
-          timeoutMs: 8000,
-          retries: 0,
-          timeoutMessage: 'Скрытие записи идёт слишком долго',
-        }
-      )
+    const { error } = await supabase
+      .from('payment_requests')
+      .update({
+        admin_hidden: true,
+      })
+      .eq('id', item.id)
 
-      if (error) {
-        throw error
-      }
-
-      setRequests((prev) => prev.filter((request) => request.id !== item.id))
-      setToast('Запись скрыта из архива администратора')
-    } catch (error) {
+    if (error) {
       console.error(error)
-      setErrorText(error.message || 'Не удалось скрыть запись')
-    } finally {
       setProcessingId(null)
+      return
     }
+
+    setRequests((prev) => prev.filter((request) => request.id !== item.id))
+    setProcessingId(null)
   }
 
   const deletePendingRequest = async (item) => {
@@ -568,52 +463,24 @@ export default function RequestsPage() {
     if (!confirmed) return
 
     setProcessingId(item.id)
-    setErrorText('')
 
-    try {
-      if (item.image_path) {
-        const { error: removeImageError } = await safeSupabase(
-          () =>
-            supabase.storage
-              .from('payment-screenshots')
-              .remove([item.image_path]),
-          {
-            timeoutMs: 8000,
-            retries: 0,
-            timeoutMessage: 'Удаление скриншота идёт слишком долго',
-          }
-        )
-
-        if (removeImageError) {
-          console.error(removeImageError)
-        }
-      }
-
-      const { error } = await safeSupabase(
-        () =>
-          supabase
-            .from('payment_requests')
-            .delete()
-            .eq('id', item.id),
-        {
-          timeoutMs: 8000,
-          retries: 0,
-          timeoutMessage: 'Удаление заявки идёт слишком долго',
-        }
-      )
-
-      if (error) {
-        throw error
-      }
-
-      setRequests((prev) => prev.filter((request) => request.id !== item.id))
-      setToast('Заявка удалена')
-    } catch (error) {
-      console.error(error)
-      setErrorText(error.message || 'Не удалось удалить заявку')
-    } finally {
-      setProcessingId(null)
+    if (item.image_path) {
+      await supabase.storage.from('payment-screenshots').remove([item.image_path])
     }
+
+    const { error } = await supabase
+      .from('payment_requests')
+      .delete()
+      .eq('id', item.id)
+
+    if (error) {
+      console.error(error)
+      setProcessingId(null)
+      return
+    }
+
+    setRequests((prev) => prev.filter((request) => request.id !== item.id))
+    setProcessingId(null)
   }
 
   const clearArchive = async () => {
@@ -625,48 +492,33 @@ export default function RequestsPage() {
     if (!confirmed) return
 
     setClearingArchive(true)
-    setErrorText('')
 
-    try {
-      const ids = archivedRequests.map((item) => item.id)
+    const ids = archivedRequests.map((item) => item.id)
 
-      const { error } = await safeSupabase(
-        () =>
-          supabase
-            .from('payment_requests')
-            .update({
-              admin_hidden: true,
-            })
-            .in('id', ids),
-        {
-          timeoutMs: 9000,
-          retries: 0,
-          timeoutMessage: 'Очистка архива идёт слишком долго',
-        }
-      )
+    const { error } = await supabase
+      .from('payment_requests')
+      .update({
+        admin_hidden: true,
+      })
+      .in('id', ids)
 
-      if (error) {
-        throw error
-      }
-
-      setRequests((prev) => prev.filter((item) => !ids.includes(item.id)))
-      setToast('Архив скрыт у администратора')
-    } catch (error) {
+    if (error) {
       console.error(error)
-      setErrorText(error.message || 'Не удалось очистить архив')
-    } finally {
       setClearingArchive(false)
+      return
     }
+
+    setRequests((prev) => prev.filter((item) => !ids.includes(item.id)))
+    setClearingArchive(false)
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
-      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
+      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-4xl font-black">Заявки</h1>
           <p className="mt-3 max-w-3xl text-zinc-400">
-            Здесь администратор видит новые заявки, архив, подтверждает оплату,
-            отклоняет заказы и при необходимости возвращает их обратно на проверку.
+            Проверка оплат, архив решений и быстрые действия администратора.
           </p>
         </div>
 
@@ -679,7 +531,7 @@ export default function RequestsPage() {
                 : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
             }`}
           >
-            Новые заявки
+            Новые заявки ({pendingRequests.length})
           </button>
 
           <button
@@ -690,15 +542,14 @@ export default function RequestsPage() {
                 : 'border border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200'
             }`}
           >
-            Архив
+            Архив ({archivedRequests.length})
           </button>
 
           <button
-            onClick={() => loadRequests({ silent: true })}
-            disabled={loading || reloading || Boolean(processingId)}
-            className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
+            onClick={loadRequests}
+            className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-3 text-sm font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
           >
-            {reloading ? 'Обновляем...' : 'Обновить'}
+            Обновить
           </button>
 
           {requestsTab === 'archive' ? (
@@ -712,18 +563,6 @@ export default function RequestsPage() {
           ) : null}
         </div>
       </div>
-
-      {toast ? (
-        <div className="mb-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-          {toast}
-        </div>
-      ) : null}
-
-      {errorText ? (
-        <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-          {errorText}
-        </div>
-      ) : null}
 
       {loading ? (
         <div className="rounded-[28px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 text-center text-lg text-zinc-300">
@@ -739,24 +578,47 @@ export default function RequestsPage() {
             {pendingRequests.map((item) => (
               <div
                 key={item.id}
-                className="rounded-[28px] border border-fuchsia-500/15 bg-zinc-950/80 p-6 shadow-[0_0_40px_rgba(168,85,247,0.06)]"
+                className="rounded-[28px] border border-fuchsia-500/15 bg-zinc-950/80 p-5 shadow-[0_0_40px_rgba(168,85,247,0.06)] sm:p-6"
               >
-                <div className="grid gap-6 lg:grid-cols-[1.4fr_220px]">
-                  <div className="space-y-3">
-                    <div className="text-3xl font-black">{item.username}</div>
-                    <div className="text-lg text-zinc-300">Тариф: {item.plan_name}</div>
-                    <div className="text-lg text-zinc-300">Сумма: {item.price_label}</div>
-                    <div className="text-lg text-zinc-300">
-                      Статус: {getStatusLabel(item.status)}
-                    </div>
-                    <div className="text-base text-zinc-500">
-                      Дата заявки: {new Date(item.created_at).toLocaleString('ru-RU')}
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px]">
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="break-words text-2xl font-black sm:text-3xl">
+                          {item.username}
+                        </div>
+                        <div className="mt-2 text-base text-zinc-300">
+                          Тариф: {item.plan_name}
+                        </div>
+                      </div>
+
+                      <StatusBadge status={item.status} />
                     </div>
 
-                    <div className="mt-6 flex flex-wrap gap-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-2xl border border-fuchsia-500/10 bg-black/30 px-4 py-4">
+                        <div className="text-xs uppercase tracking-wide text-zinc-500">
+                          Сумма
+                        </div>
+                        <div className="mt-2 text-base font-bold text-white">
+                          {item.price_label}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-fuchsia-500/10 bg-black/30 px-4 py-4">
+                        <div className="text-xs uppercase tracking-wide text-zinc-500">
+                          Дата заявки
+                        </div>
+                        <div className="mt-2 text-base font-bold text-white">
+                          {new Date(item.created_at).toLocaleString('ru-RU')}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                       <button
                         onClick={() => openPreview(item)}
-                        className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
+                        className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
                       >
                         Смотреть изображение
                       </button>
@@ -764,23 +626,23 @@ export default function RequestsPage() {
                       <button
                         onClick={() => approvePayment(item)}
                         disabled={processingId === item.id}
-                        className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-emerald-500/20 disabled:opacity-60"
+                        className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-emerald-500/20 disabled:opacity-60"
                       >
-                        {processingId === item.id ? 'Подтверждаем...' : 'Подтвердить оплату'}
+                        {processingId === item.id ? 'Подтверждаем...' : 'Подтвердить'}
                       </button>
 
                       <button
                         onClick={() => openRejectModal(item)}
                         disabled={processingId === item.id}
-                        className="rounded-2xl border border-red-400/20 bg-red-500/10 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
+                        className="rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-red-500/20 disabled:opacity-60"
                       >
-                        Отклонить заявку
+                        Отклонить
                       </button>
 
                       <button
                         onClick={() => deletePendingRequest(item)}
                         disabled={processingId === item.id}
-                        className="rounded-2xl border border-zinc-400/20 bg-white/5 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-white/10 disabled:opacity-60"
+                        className="rounded-2xl border border-zinc-400/20 bg-white/5 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-white/10 disabled:opacity-60"
                       >
                         Удалить
                       </button>
@@ -789,7 +651,7 @@ export default function RequestsPage() {
 
                   <button
                     onClick={() => openPreview(item)}
-                    className="flex min-h-[220px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-6 text-center text-2xl font-black uppercase tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20"
+                    className="flex min-h-[180px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-6 text-center text-xl font-black uppercase tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20 sm:text-2xl"
                   >
                     Скриншот
                   </button>
@@ -807,36 +669,58 @@ export default function RequestsPage() {
           {archivedRequests.map((item) => (
             <div
               key={item.id}
-              className="rounded-[28px] border border-fuchsia-500/15 bg-zinc-950/80 p-6 shadow-[0_0_40px_rgba(168,85,247,0.06)]"
+              className="rounded-[28px] border border-fuchsia-500/15 bg-zinc-950/80 p-5 shadow-[0_0_40px_rgba(168,85,247,0.06)] sm:p-6"
             >
-              <div className="grid gap-6 lg:grid-cols-[1.4fr_220px]">
-                <div className="space-y-3">
-                  <div className="text-3xl font-black">{item.username}</div>
-                  <div className="text-lg text-zinc-300">Тариф: {item.plan_name}</div>
-                  <div className="text-lg text-zinc-300">Сумма: {item.price_label}</div>
-                  <div className="text-lg text-zinc-300">
-                    Статус: {getStatusLabel(item.status)}
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px]">
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="break-words text-2xl font-black sm:text-3xl">
+                        {item.username}
+                      </div>
+                      <div className="mt-2 text-base text-zinc-300">
+                        Тариф: {item.plan_name}
+                      </div>
+                    </div>
+
+                    <StatusBadge status={item.status} />
                   </div>
-                  <div className="text-base text-zinc-500">
-                    Дата решения:{' '}
-                    {new Date(item.reviewed_at || item.created_at).toLocaleString('ru-RU')}
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-fuchsia-500/10 bg-black/30 px-4 py-4">
+                      <div className="text-xs uppercase tracking-wide text-zinc-500">
+                        Сумма
+                      </div>
+                      <div className="mt-2 text-base font-bold text-white">
+                        {item.price_label}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-fuchsia-500/10 bg-black/30 px-4 py-4">
+                      <div className="text-xs uppercase tracking-wide text-zinc-500">
+                        Дата решения
+                      </div>
+                      <div className="mt-2 text-base font-bold text-white">
+                        {new Date(item.reviewed_at || item.created_at).toLocaleString('ru-RU')}
+                      </div>
+                    </div>
                   </div>
 
                   {item.status === 'approved' && item.promo_code ? (
-                    <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4">
-                      <div className="text-sm uppercase tracking-wide text-emerald-200">
+                    <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4">
+                      <div className="text-xs uppercase tracking-wide text-emerald-200">
                         Выданный промокод
                       </div>
-                      <div className="mt-2 text-xl font-black text-white">
+                      <div className="mt-2 break-all text-xl font-black text-white">
                         {item.promo_code}
                       </div>
                     </div>
                   ) : null}
 
                   {item.status === 'rejected' ? (
-                    <div className="mt-4 space-y-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-4">
+                    <div className="space-y-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-4">
                       <div>
-                        <div className="text-sm uppercase tracking-wide text-red-200">
+                        <div className="text-xs uppercase tracking-wide text-red-200">
                           Причина отклонения
                         </div>
                         <div className="mt-2 text-lg font-black text-white">
@@ -845,7 +729,7 @@ export default function RequestsPage() {
                       </div>
 
                       <div>
-                        <div className="text-sm uppercase tracking-wide text-red-200">
+                        <div className="text-xs uppercase tracking-wide text-red-200">
                           Комментарий администратора
                         </div>
                         <div className="mt-2 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
@@ -855,10 +739,10 @@ export default function RequestsPage() {
                     </div>
                   ) : null}
 
-                  <div className="mt-6 flex flex-wrap gap-3">
+                  <div className="grid gap-3 sm:grid-cols-3">
                     <button
                       onClick={() => openPreview(item)}
-                      className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
+                      className="rounded-2xl bg-gradient-to-r from-violet-700 to-fuchsia-600 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white shadow-[0_0_40px_rgba(168,85,247,0.28)] transition hover:scale-[1.01]"
                     >
                       Смотреть изображение
                     </button>
@@ -866,15 +750,15 @@ export default function RequestsPage() {
                     <button
                       onClick={() => restoreToPending(item)}
                       disabled={processingId === item.id}
-                      className="rounded-2xl border border-yellow-400/20 bg-yellow-500/10 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-yellow-500/20 disabled:opacity-60"
+                      className="rounded-2xl border border-yellow-400/20 bg-yellow-500/10 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-yellow-500/20 disabled:opacity-60"
                     >
-                      {processingId === item.id ? 'Возвращаем...' : 'Вернуть на проверку'}
+                      {processingId === item.id ? 'Возвращаем...' : 'Вернуть'}
                     </button>
 
                     <button
                       onClick={() => hideArchivedRequestForAdmin(item)}
                       disabled={processingId === item.id}
-                      className="rounded-2xl border border-zinc-400/20 bg-white/5 px-6 py-3 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-white/10 disabled:opacity-60"
+                      className="rounded-2xl border border-zinc-400/20 bg-white/5 px-5 py-4 text-sm font-extrabold uppercase tracking-wide text-white transition hover:bg-white/10 disabled:opacity-60"
                     >
                       Скрыть
                     </button>
@@ -883,7 +767,7 @@ export default function RequestsPage() {
 
                 <button
                   onClick={() => openPreview(item)}
-                  className="flex min-h-[220px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-6 text-center text-2xl font-black uppercase tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20"
+                  className="flex min-h-[180px] w-full items-center justify-center rounded-[22px] border border-fuchsia-500/15 bg-[#09090f] p-6 text-center text-xl font-black uppercase tracking-wide text-fuchsia-400 transition hover:border-fuchsia-400/30 hover:bg-fuchsia-950/20 sm:text-2xl"
                 >
                   Скриншот
                 </button>

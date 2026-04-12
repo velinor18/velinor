@@ -2,16 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { downloadAvatarAsObjectUrl } from '../lib/avatar'
-import {
-  readDataCache,
-  safeSupabase,
-  writeDataCache,
-} from '../lib/asyncData'
 import { normalizeAvatarShape } from '../lib/avatarShapes'
 
-const INITIAL_MESSAGES_LIMIT = 25
-const OLDER_MESSAGES_LIMIT = 40
-const CHAT_CACHE_TTL_MS = 90 * 1000
+const INITIAL_MESSAGES_LIMIT = 40
+const OLDER_MESSAGES_LIMIT = 60
 
 function getAvatarShapeClass(shape) {
   const normalized = normalizeAvatarShape(shape)
@@ -69,7 +63,7 @@ function MessageAvatar({ username, avatarUrl, avatarShape }) {
 
   return (
     <div
-      className={`flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden border border-fuchsia-500/20 bg-black text-sm font-black uppercase text-fuchsia-300 ${shapeClass}`}
+      className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden border border-fuchsia-500/20 bg-black text-sm font-black uppercase text-fuchsia-300 sm:h-12 sm:w-12 ${shapeClass}`}
     >
       {avatarUrl ? (
         <img
@@ -101,7 +95,7 @@ function ChatMessageItem({ item, isOwn, avatarUrl }) {
       ) : null}
 
       <div
-        className={`max-w-[85%] rounded-[24px] border px-4 py-3 sm:max-w-[75%] ${
+        className={`max-w-[88%] rounded-[22px] border px-4 py-3 sm:max-w-[76%] ${
           isOwn
             ? 'border-fuchsia-500/25 bg-fuchsia-700/10'
             : 'border-fuchsia-500/10 bg-white/[0.03]'
@@ -149,7 +143,6 @@ export default function ChatPage({ user, profile }) {
   const bottomRef = useRef(null)
   const chatViewportRef = useRef(null)
   const requestedAvatarPathsRef = useRef(new Set())
-  const skipNextAutoScrollRef = useRef(false)
 
   useEffect(() => {
     setChatRestriction({
@@ -179,7 +172,7 @@ export default function ChatPage({ user, profile }) {
       requestedAvatarPathsRef.current.add(path)
     })
 
-    const results = await Promise.allSettled(
+    const results = await Promise.all(
       uniquePaths.map(async (path) => {
         const url = await downloadAvatarAsObjectUrl(path)
         return {
@@ -192,11 +185,9 @@ export default function ChatPage({ user, profile }) {
     setAvatarUrlDirectory((prev) => {
       const next = { ...prev }
 
-      results.forEach((result, index) => {
-        const path = uniquePaths[index]
-
-        if (result.status === 'fulfilled' && result.value?.url) {
-          next[path] = result.value.url
+      results.forEach(({ path, url }) => {
+        if (url) {
+          next[path] = url
         } else {
           requestedAvatarPathsRef.current.delete(path)
         }
@@ -218,57 +209,31 @@ export default function ChatPage({ user, profile }) {
         return
       }
 
-      const cacheKey = `chat_initial_${user.id}`
-      const cachedMessages = readDataCache(cacheKey, CHAT_CACHE_TTL_MS)
+      setLoading(true)
 
-      if (cachedMessages?.length) {
-        setMessages(cachedMessages)
-        setHasOlderMessages(cachedMessages.length === INITIAL_MESSAGES_LIMIT)
-        setLoading(false)
-        loadAvatarUrlsForMessages(cachedMessages)
-      } else {
-        setLoading(true)
-      }
-
-      try {
-        const { data, error } = await safeSupabase(
-          () =>
-            supabase
-              .from('chat_messages')
-              .select(
-                'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
-              )
-              .order('created_at', { ascending: false })
-              .limit(INITIAL_MESSAGES_LIMIT),
-          {
-            timeoutMs: 7000,
-            retries: 1,
-            timeoutMessage: 'Чат загружается слишком долго',
-          }
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select(
+          'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
         )
+        .order('created_at', { ascending: false })
+        .limit(INITIAL_MESSAGES_LIMIT)
 
-        if (!isMounted) return
-        if (error) throw error
+      if (!isMounted) return
 
-        const nextMessages = [...(data ?? [])].reverse()
-
-        setMessages(nextMessages)
-        setHasOlderMessages((data?.length ?? 0) === INITIAL_MESSAGES_LIMIT)
-        setLoading(false)
-
-        writeDataCache(cacheKey, nextMessages)
-        loadAvatarUrlsForMessages(nextMessages)
-      } catch (error) {
+      if (error) {
         console.error(error)
-
-        if (!isMounted) return
-
-        if (!cachedMessages?.length) {
-          setMessages([])
-          setErrorText(error.message || 'Не удалось загрузить чат')
-          setLoading(false)
-        }
+        setMessages([])
+        setLoading(false)
+        return
       }
+
+      const nextMessages = [...(data ?? [])].reverse()
+      setMessages(nextMessages)
+      setHasOlderMessages((data?.length ?? 0) === INITIAL_MESSAGES_LIMIT)
+      setLoading(false)
+
+      loadAvatarUrlsForMessages(nextMessages)
     }
 
     loadInitialMessages()
@@ -312,17 +277,11 @@ export default function ChatPage({ user, profile }) {
   }, [user])
 
   useEffect(() => {
-    if (skipNextAutoScrollRef.current) {
-      skipNextAutoScrollRef.current = false
-      return
-    }
-
-    bottomRef.current?.scrollIntoView({ behavior: 'auto' })
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
   useEffect(() => {
     if (!errorText) return
-
     const timer = setTimeout(() => setErrorText(''), 3600)
     return () => clearTimeout(timer)
   }, [errorText])
@@ -334,48 +293,36 @@ export default function ChatPage({ user, profile }) {
 
     setLoadingOlder(true)
 
-    try {
-      const oldestCreatedAt = messages[0]?.created_at
+    const oldestCreatedAt = messages[0]?.created_at
 
-      const { data, error } = await safeSupabase(
-        () =>
-          supabase
-            .from('chat_messages')
-            .select(
-              'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
-            )
-            .lt('created_at', oldestCreatedAt)
-            .order('created_at', { ascending: false })
-            .limit(OLDER_MESSAGES_LIMIT),
-        {
-          timeoutMs: 7000,
-          retries: 1,
-          timeoutMessage: 'Старые сообщения загружаются слишком долго',
-        }
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select(
+        'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
       )
+      .lt('created_at', oldestCreatedAt)
+      .order('created_at', { ascending: false })
+      .limit(OLDER_MESSAGES_LIMIT)
 
-      setLoadingOlder(false)
+    setLoadingOlder(false)
 
-      if (error) throw error
-
-      const olderMessages = [...(data ?? [])].reverse()
-
-      skipNextAutoScrollRef.current = true
-
-      setMessages((prev) => [...olderMessages, ...prev])
-      setHasOlderMessages((data?.length ?? 0) === OLDER_MESSAGES_LIMIT)
-      loadAvatarUrlsForMessages(olderMessages)
-
-      requestAnimationFrame(() => {
-        if (chatViewportRef.current) {
-          chatViewportRef.current.scrollTop = 120
-        }
-      })
-    } catch (error) {
+    if (error) {
       console.error(error)
-      setLoadingOlder(false)
-      setErrorText(error.message || 'Не удалось загрузить старые сообщения')
+      setErrorText('Не удалось загрузить старые сообщения')
+      return
     }
+
+    const olderMessages = [...(data ?? [])].reverse()
+
+    setMessages((prev) => [...olderMessages, ...prev])
+    setHasOlderMessages((data?.length ?? 0) === OLDER_MESSAGES_LIMIT)
+    loadAvatarUrlsForMessages(olderMessages)
+
+    requestAnimationFrame(() => {
+      if (chatViewportRef.current) {
+        chatViewportRef.current.scrollTop = 120
+      }
+    })
   }
 
   async function handleSubmit(event) {
@@ -409,45 +356,31 @@ export default function ChatPage({ user, profile }) {
 
     setSending(true)
 
-    try {
-      const { data, error } = await safeSupabase(
-        () =>
-          supabase.rpc('send_chat_message', {
-            p_text: trimmed,
-          }),
-        {
-          timeoutMs: 7000,
-          retries: 0,
-          timeoutMessage: 'Сообщение отправляется слишком долго',
-        }
-      )
+    const { data, error } = await supabase.rpc('send_chat_message', {
+      p_text: trimmed,
+    })
 
-      setSending(false)
+    setSending(false)
 
-      if (error) {
-        console.error(error)
-        setErrorText(error.message || 'Не удалось отправить сообщение')
-        return
-      }
-
-      if (!data?.ok) {
-        if (data?.chat_is_blocked || data?.chat_blocked_until) {
-          setChatRestriction({
-            isBlocked: Boolean(data?.chat_is_blocked),
-            blockedUntil: data?.chat_blocked_until ?? null,
-          })
-        }
-
-        setErrorText(data?.message || 'Сообщение отклонено')
-        return
-      }
-
-      setMessageText('')
-    } catch (error) {
+    if (error) {
       console.error(error)
-      setSending(false)
       setErrorText(error.message || 'Не удалось отправить сообщение')
+      return
     }
+
+    if (!data?.ok) {
+      if (data?.chat_is_blocked || data?.chat_blocked_until) {
+        setChatRestriction({
+          isBlocked: Boolean(data?.chat_is_blocked),
+          blockedUntil: data?.chat_blocked_until ?? null,
+        })
+      }
+
+      setErrorText(data?.message || 'Сообщение отклонено')
+      return
+    }
+
+    setMessageText('')
   }
 
   if (!user) {
@@ -473,15 +406,24 @@ export default function ChatPage({ user, profile }) {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
       <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-4 shadow-[0_0_60px_rgba(168,85,247,0.08)] sm:p-6">
-        <div className="border-b border-fuchsia-500/10 pb-5">
-          <h1 className="text-4xl font-black">Общий чат</h1>
+        <div className="flex flex-col gap-4 border-b border-fuchsia-500/10 pb-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-black sm:text-4xl">Общий чат</h1>
+            <div className="mt-2 text-sm text-zinc-500">
+              Сообщения отображаются в реальном времени
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-fuchsia-500/15 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
+            Лимит сообщения: 1200 символов
+          </div>
         </div>
 
         <div
           ref={chatViewportRef}
-          className="mt-6 h-[52vh] min-h-[420px] overflow-y-auto rounded-[28px] border border-fuchsia-500/10 bg-black/30 p-4 sm:p-5"
+          className="mt-6 h-[52vh] min-h-[420px] overflow-y-auto rounded-[28px] border border-fuchsia-500/10 bg-black/30 p-3 sm:p-5"
         >
           {loading ? (
             <div className="flex h-full items-center justify-center text-zinc-400">
@@ -503,8 +445,13 @@ export default function ChatPage({ user, profile }) {
               ) : null}
 
               {messages.length === 0 ? (
-                <div className="flex h-[320px] items-center justify-center text-center text-zinc-500">
-                  Пока сообщений нет. Напишите первым.
+                <div className="flex h-[320px] flex-col items-center justify-center rounded-[24px] border border-fuchsia-500/10 bg-black/20 px-4 text-center text-zinc-500">
+                  <div className="text-2xl font-black text-zinc-300">
+                    Чат пока пуст
+                  </div>
+                  <div className="mt-3 max-w-md text-sm leading-7">
+                    После очистки или в новом чате здесь появятся первые сообщения.
+                  </div>
                 </div>
               ) : (
                 messages.map((item) => (
@@ -512,9 +459,7 @@ export default function ChatPage({ user, profile }) {
                     key={item.id}
                     item={item}
                     isOwn={item.user_id === user.id}
-                    avatarUrl={
-                      item.avatar_path ? avatarUrlDirectory[item.avatar_path] || '' : ''
-                    }
+                    avatarUrl={item.avatar_path ? avatarUrlDirectory[item.avatar_path] || '' : ''}
                   />
                 ))
               )}
@@ -550,12 +495,12 @@ export default function ChatPage({ user, profile }) {
               className="w-full resize-none rounded-2xl border border-fuchsia-500/15 bg-black/40 px-4 py-4 text-white outline-none transition focus:border-fuchsia-400/40 disabled:cursor-not-allowed disabled:opacity-60"
             />
 
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-sm text-zinc-500">
-                Enter отправляет сообщение. Shift + Enter делает перенос строки.
+            <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="text-sm leading-6 text-zinc-500">
+                Enter отправляет сообщение, Shift + Enter делает перенос строки.
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <div className="text-sm text-zinc-500">
                   {messageText.trim().length}/1200
                 </div>

@@ -853,10 +853,6 @@ export default function HomePage({ user, profile }) {
                 </div>
               ))}
             </div>
-
-            <div className="mt-6 text-sm text-zinc-500">
-              Статистика формируется из реальных покупок и опубликованных отзывов.
-            </div>
           </div>
         </section>
 
