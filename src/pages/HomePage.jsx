@@ -4,10 +4,19 @@ import { supabase } from '../lib/supabase'
 import { inspectReceiptImage, revokeReceiptPreviewUrl } from '../lib/receipt'
 import { downloadPrivateImageAsObjectUrl } from '../lib/storage'
 import { fetchPublishedReviews, fetchReviewsStats } from '../lib/reviews'
+import {
+  readDataCache,
+  safeSupabase,
+  writeDataCache,
+} from '../lib/asyncData'
 
 const WIDGET_STORAGE_KEY = 'velinor_widget_hidden_until'
 const WIDGET_HIDE_HOURS = 12
 const CARD_NUMBER = '2202 2088 0146 2053'
+
+const ORDERS_CACHE_PREFIX = 'velinor_orders_cache_'
+const PUBLIC_STATS_CACHE_KEY = 'velinor_public_stats_v1'
+const REVIEWS_PREVIEW_CACHE_KEY = 'velinor_reviews_preview_v1'
 
 const plans = [
   {
@@ -405,29 +414,37 @@ export default function HomePage({ user, profile }) {
   }, [isPurchaseModalOpen, handleReceiptSelected])
 
   async function loadPublicStats() {
+    const cachedStats = readDataCache(PUBLIC_STATS_CACHE_KEY, 3 * 60 * 1000)
+
+    if (cachedStats) {
+      setSiteStats(cachedStats)
+    }
+
     if (!supabase) {
-      setSiteStats({
-        clientsCount: 0,
-        successRate: 0,
-        reviewsCount: 0,
-      })
+      if (!cachedStats) {
+        setSiteStats({
+          clientsCount: 0,
+          successRate: 0,
+          reviewsCount: 0,
+        })
+      }
       return
     }
 
     try {
-      const [{ data, error }, reviewsStats] = await Promise.all([
-        supabase.rpc('get_public_site_stats'),
+      const [statsResult, reviewsStats] = await Promise.all([
+        safeSupabase(() => supabase.rpc('get_public_site_stats'), {
+          timeoutMs: 5000,
+          retries: 0,
+          timeoutMessage: 'Статистика сайта загружается слишком долго',
+        }),
         fetchReviewsStats(),
       ])
 
+      const { data, error } = statsResult
+
       if (error) {
-        console.error(error)
-        setSiteStats({
-          clientsCount: 0,
-          successRate: 0,
-          reviewsCount: Number(reviewsStats?.published_reviews_count || 0),
-        })
-        return
+        throw error
       }
 
       const row = Array.isArray(data) ? data[0] : data
@@ -438,28 +455,43 @@ export default function HomePage({ user, profile }) {
       const successRate =
         totalRequests > 0 ? Math.round((approvedRequests / totalRequests) * 100) : 0
 
-      setSiteStats({
+      const nextStats = {
         clientsCount: uniqueBuyers,
         successRate,
         reviewsCount: Number(reviewsStats?.published_reviews_count || 0),
-      })
+      }
+
+      setSiteStats(nextStats)
+      writeDataCache(PUBLIC_STATS_CACHE_KEY, nextStats)
     } catch (error) {
       console.error(error)
-      setSiteStats({
-        clientsCount: 0,
-        successRate: 0,
-        reviewsCount: 0,
-      })
+
+      if (!cachedStats) {
+        setSiteStats({
+          clientsCount: 0,
+          successRate: 0,
+          reviewsCount: 0,
+        })
+      }
     }
   }
 
   async function loadReviewsPreview() {
+    const cachedReviews = readDataCache(REVIEWS_PREVIEW_CACHE_KEY, 3 * 60 * 1000)
+
+    if (cachedReviews) {
+      setReviewsPreview(cachedReviews)
+    }
+
     try {
       const items = await fetchPublishedReviews(3)
       setReviewsPreview(items)
+      writeDataCache(REVIEWS_PREVIEW_CACHE_KEY, items)
     } catch (error) {
       console.error(error)
-      setReviewsPreview([])
+      if (!cachedReviews) {
+        setReviewsPreview([])
+      }
     }
   }
 
@@ -504,41 +536,69 @@ export default function HomePage({ user, profile }) {
     navigate('/reviews')
   }
 
-  const loadOrders = async () => {
-    if (!supabase || !user) {
+  const loadOrders = useCallback(async () => {
+    if (!user) {
       setOrders([])
-      return
-    }
-
-    setOrdersLoading(true)
-
-    const { data, error } = await supabase
-      .from('payment_requests')
-      .select(
-        'id, user_id, username, plan_id, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden'
-      )
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error(error)
-      setToast('Не удалось загрузить заказы')
       setOrdersLoading(false)
       return
     }
 
-    setOrders(data ?? [])
-    setOrdersLoading(false)
-  }
+    const cacheKey = `${ORDERS_CACHE_PREFIX}${user.id}`
+    const cachedOrders = readDataCache(cacheKey, 90 * 1000)
 
-  useEffect(() => {
-    if (!user) {
-      setOrders([])
+    if (cachedOrders) {
+      setOrders(cachedOrders)
+      setOrdersLoading(false)
+    } else {
+      setOrdersLoading(true)
+    }
+
+    if (!supabase) {
+      if (!cachedOrders) {
+        setOrders([])
+      }
+      setOrdersLoading(false)
       return
     }
 
-    loadOrders()
+    try {
+      const { data, error } = await safeSupabase(
+        () =>
+          supabase
+            .from('payment_requests')
+            .select(
+              'id, user_id, username, plan_id, plan_name, price_label, image_path, status, created_at, reviewed_at, promo_code, admin_hidden'
+            )
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false }),
+        {
+          timeoutMs: 5000,
+          retries: 0,
+          timeoutMessage: 'Покупки загружаются слишком долго',
+        }
+      )
+
+      if (error) {
+        throw error
+      }
+
+      const nextOrders = data ?? []
+      setOrders(nextOrders)
+      writeDataCache(cacheKey, nextOrders)
+    } catch (error) {
+      console.error(error)
+      if (!cachedOrders) {
+        setOrders([])
+        setToast(error?.message || 'Не удалось загрузить заказы')
+      }
+    } finally {
+      setOrdersLoading(false)
+    }
   }, [user])
+
+  useEffect(() => {
+    loadOrders()
+  }, [loadOrders])
 
   useEffect(() => {
     const handleOpenOrders = async () => {
@@ -554,7 +614,7 @@ export default function HomePage({ user, profile }) {
     return () => {
       window.removeEventListener('openPurchasesModal', handleOpenOrders)
     }
-  }, [user])
+  }, [user, loadOrders])
 
   const handleFileChange = async (e) => {
     const file = e.target.files?.[0]
@@ -572,14 +632,24 @@ export default function HomePage({ user, profile }) {
       imageUrl: null,
     })
 
-    const imageUrl = await downloadPrivateImageAsObjectUrl(item.image_path)
+    try {
+      const imageUrl = await downloadPrivateImageAsObjectUrl(item.image_path)
 
-    setPreviewItem({
-      title: `Скриншот: ${item.plan_name}`,
-      subtitle: `Статус: ${getStatusLabel(item.status)}`,
-      imageUrl,
-    })
-    setPreviewLoading(false)
+      setPreviewItem({
+        title: `Скриншот: ${item.plan_name}`,
+        subtitle: `Статус: ${getStatusLabel(item.status)}`,
+        imageUrl,
+      })
+    } catch (error) {
+      console.error(error)
+      setPreviewItem({
+        title: `Скриншот: ${item.plan_name}`,
+        subtitle: `Статус: ${getStatusLabel(item.status)}`,
+        imageUrl: null,
+      })
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
   const submitCardPurchase = async () => {
@@ -614,46 +684,62 @@ export default function HomePage({ user, profile }) {
 
     const filePath = `${user.id}/${Date.now()}-${safeName}`
 
-    const { error: uploadError } = await supabase.storage
-      .from('payment-screenshots')
-      .upload(filePath, uploadedReceipt.file, {
-        cacheControl: '3600',
-        upsert: false,
-        contentType: uploadedReceipt.file.type || 'image/png',
-      })
+    try {
+      const uploadResult = await safeSupabase(
+        () =>
+          supabase.storage
+            .from('payment-screenshots')
+            .upload(filePath, uploadedReceipt.file, {
+              cacheControl: '3600',
+              upsert: false,
+              contentType: uploadedReceipt.file.type || 'image/png',
+            }),
+        {
+          timeoutMs: 7000,
+          retries: 0,
+          timeoutMessage: 'Загрузка скриншота заняла слишком много времени',
+        }
+      )
 
-    if (uploadError) {
-      console.error(uploadError)
-      setToast('Не удалось загрузить скриншот')
+      if (uploadResult?.error) {
+        throw uploadResult.error
+      }
+
+      const insertResult = await safeSupabase(
+        () =>
+          supabase.from('payment_requests').insert({
+            user_id: user.id,
+            username: profile.username,
+            plan_id: selectedPlan.id,
+            plan_name: selectedPlan.title,
+            price_label: selectedPlan.priceLabel,
+            image_path: filePath,
+            admin_hidden: false,
+          }),
+        {
+          timeoutMs: 7000,
+          retries: 0,
+          timeoutMessage: 'Сохранение заявки заняло слишком много времени',
+        }
+      )
+
+      if (insertResult?.error) {
+        throw insertResult.error
+      }
+
+      await loadOrders()
+      await loadPublicStats()
       setSubmitting(false)
-      return
-    }
-
-    const { error: insertError } = await supabase.from('payment_requests').insert({
-      user_id: user.id,
-      username: profile.username,
-      plan_id: selectedPlan.id,
-      plan_name: selectedPlan.title,
-      price_label: selectedPlan.priceLabel,
-      image_path: filePath,
-      admin_hidden: false,
-    })
-
-    if (insertError) {
-      console.error(insertError)
-      setToast('Не удалось сохранить заявку')
+      clearUploadedReceipt()
+      setIsPurchaseModalOpen(false)
+      setIsOrdersModalOpen(true)
+      setOrdersTab('active')
+      setToast('Заявка успешно отправлена')
+    } catch (error) {
+      console.error(error)
+      setToast(error?.message || 'Не удалось отправить заявку')
       setSubmitting(false)
-      return
     }
-
-    await loadOrders()
-    await loadPublicStats()
-    setSubmitting(false)
-    clearUploadedReceipt()
-    setIsPurchaseModalOpen(false)
-    setIsOrdersModalOpen(true)
-    setOrdersTab('active')
-    setToast('Заявка успешно отправлена')
   }
 
   const submitCryptoAttempt = () => {

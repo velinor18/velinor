@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 
-export default function Header({ user, profile, authLoading }) {
+export default function Header({
+  user,
+  profile,
+  authLoading,
+  profileLoading = false,
+}) {
   const navigate = useNavigate()
   const location = useLocation()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
 
   const isAdmin = profile?.role === 'admin'
+  const canShowAdminLinks = Boolean(user) && !profileLoading && isAdmin
 
   useEffect(() => {
     setIsMobileMenuOpen(false)
@@ -27,6 +33,9 @@ export default function Header({ user, profile, authLoading }) {
   const mobileButtonClass =
     'w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-left text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
 
+  const mobileLinkClass =
+    'block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
+
   const goToHomeSection = (sectionId) => {
     closeMobileMenu()
 
@@ -37,7 +46,7 @@ export default function Header({ user, profile, authLoading }) {
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'start' })
         }
-      }, 140)
+      }, 120)
       return
     }
 
@@ -54,7 +63,7 @@ export default function Header({ user, profile, authLoading }) {
       navigate('/')
       setTimeout(() => {
         window.scrollTo({ top: 0, behavior: 'smooth' })
-      }, 140)
+      }, 120)
       return
     }
 
@@ -68,7 +77,7 @@ export default function Header({ user, profile, authLoading }) {
       navigate('/')
       setTimeout(() => {
         window.dispatchEvent(new Event('openPurchasesModal'))
-      }, 150)
+      }, 120)
       return
     }
 
@@ -141,10 +150,16 @@ export default function Header({ user, profile, authLoading }) {
               </NavLink>
             )}
 
-            {!authLoading && user && isAdmin && (
-              <NavLink to="/requests" className={linkClass}>
-                Заявки
-              </NavLink>
+            {canShowAdminLinks && (
+              <>
+                <NavLink to="/requests" className={linkClass}>
+                  Заявки
+                </NavLink>
+
+                <NavLink to="/violations" className={linkClass}>
+                  Нарушения
+                </NavLink>
+              </>
             )}
           </nav>
 
@@ -197,7 +212,7 @@ export default function Header({ user, profile, authLoading }) {
               <NavLink
                 to="/reviews"
                 onClick={closeMobileMenu}
-                className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                className={mobileLinkClass}
               >
                 Отзывы
               </NavLink>
@@ -212,7 +227,7 @@ export default function Header({ user, profile, authLoading }) {
               <NavLink
                 to="/rules"
                 onClick={closeMobileMenu}
-                className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                className={mobileLinkClass}
               >
                 Правила
               </NavLink>
@@ -221,7 +236,7 @@ export default function Header({ user, profile, authLoading }) {
                 <NavLink
                   to="/chat"
                   onClick={closeMobileMenu}
-                  className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                  className={mobileLinkClass}
                 >
                   Чат
                 </NavLink>
@@ -239,7 +254,7 @@ export default function Header({ user, profile, authLoading }) {
                   <NavLink
                     to="/login"
                     onClick={closeMobileMenu}
-                    className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                    className={mobileLinkClass}
                   >
                     Вход
                   </NavLink>
@@ -247,7 +262,7 @@ export default function Header({ user, profile, authLoading }) {
                   <NavLink
                     to="/register"
                     onClick={closeMobileMenu}
-                    className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                    className={mobileLinkClass}
                   >
                     Регистрация
                   </NavLink>
@@ -258,20 +273,30 @@ export default function Header({ user, profile, authLoading }) {
                 <NavLink
                   to="/profile"
                   onClick={closeMobileMenu}
-                  className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
+                  className={mobileLinkClass}
                 >
                   Профиль
                 </NavLink>
               )}
 
-              {!authLoading && user && isAdmin && (
-                <NavLink
-                  to="/requests"
-                  onClick={closeMobileMenu}
-                  className="block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50"
-                >
-                  Заявки
-                </NavLink>
+              {canShowAdminLinks && (
+                <>
+                  <NavLink
+                    to="/requests"
+                    onClick={closeMobileMenu}
+                    className={mobileLinkClass}
+                  >
+                    Заявки
+                  </NavLink>
+
+                  <NavLink
+                    to="/violations"
+                    onClick={closeMobileMenu}
+                    className={mobileLinkClass}
+                  >
+                    Нарушения
+                  </NavLink>
+                </>
               )}
             </div>
           </div>

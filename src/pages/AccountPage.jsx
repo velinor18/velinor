@@ -17,8 +17,14 @@ import {
   buildTelegramBotUrl,
   TELEGRAM_BOT_USERNAME,
 } from '../lib/telegram'
+import {
+  readDataCache,
+  safeSupabase,
+  writeDataCache,
+} from '../lib/asyncData'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
+const VIOLATIONS_CACHE_PREFIX = 'velinor_account_violations_'
 
 const PROFILE_SELECT_QUERY = `
   id,
@@ -185,9 +191,7 @@ function TelegramStatusCard({
   onUnlink,
 }) {
   const topLabel = isLinked ? 'Username Telegram' : 'Статус'
-  const topValue = isLinked
-    ? `@${telegramUsername}`
-    : statusText
+  const topValue = isLinked ? `@${telegramUsername}` : statusText
 
   return (
     <div className="rounded-3xl border border-fuchsia-500/10 bg-black/40 p-6 sm:p-7">
@@ -289,12 +293,12 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [avatarSaving, setAvatarSaving] = useState(false)
   const [shapeSaving, setShapeSaving] = useState(false)
   const [violations, setViolations] = useState([])
-  const [violationsLoading, setViolationsLoading] = useState(true)
+  const [violationsLoading, setViolationsLoading] = useState(false)
   const [selectedViolation, setSelectedViolation] = useState(null)
   const [avatarMessage, setAvatarMessage] = useState('')
   const [avatarError, setAvatarError] = useState('')
 
-  const [telegramSectionLoading, setTelegramSectionLoading] = useState(true)
+  const [telegramSectionLoading, setTelegramSectionLoading] = useState(false)
   const [telegramActionLoading, setTelegramActionLoading] = useState(false)
   const [telegramMessage, setTelegramMessage] = useState('')
 
@@ -307,6 +311,9 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
   useEffect(() => {
     setProfileView(profile ?? null)
+    if (profile) {
+      setTelegramSectionLoading(false)
+    }
   }, [profile])
 
   useEffect(() => {
@@ -351,25 +358,33 @@ export default function AccountPage({ user, profile, profileLoading }) {
         return
       }
 
-      setAvatarLoading(true)
-
-      const nextUrl = await downloadAvatarAsObjectUrl(profileView.avatar_path)
-
-      if (!isMounted) {
-        revokeObjectUrl(nextUrl)
-        return
+      if (!avatarObjectUrl) {
+        setAvatarLoading(true)
       }
 
-      setAvatarObjectUrl((prevUrl) => {
-        if (prevUrl && prevUrl !== nextUrl) {
-          revokeObjectUrl(prevUrl)
+      try {
+        const nextUrl = await downloadAvatarAsObjectUrl(profileView.avatar_path)
+
+        if (!isMounted) {
+          revokeObjectUrl(nextUrl)
+          return
         }
 
-        avatarUrlRef.current = nextUrl || ''
-        return nextUrl || ''
-      })
+        setAvatarObjectUrl((prevUrl) => {
+          if (prevUrl && prevUrl !== nextUrl) {
+            revokeObjectUrl(prevUrl)
+          }
 
-      setAvatarLoading(false)
+          avatarUrlRef.current = nextUrl || ''
+          return nextUrl || ''
+        })
+      } catch (error) {
+        console.error(error)
+      } finally {
+        if (isMounted) {
+          setAvatarLoading(false)
+        }
+      }
     }
 
     loadAvatar()
@@ -391,28 +406,53 @@ export default function AccountPage({ user, profile, profileLoading }) {
         return
       }
 
-      setViolationsLoading(true)
+      const cacheKey = `${VIOLATIONS_CACHE_PREFIX}${user.id}`
+      const cachedViolations = readDataCache(cacheKey, 60 * 1000)
 
-      const { data, error } = await supabase
-        .from('violations')
-        .select(
-          'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
-        )
-        .eq('user_id', user.id)
-        .eq('is_revoked', false)
-        .order('created_at', { ascending: false })
-
-      if (!isMounted) return
-
-      if (error) {
-        console.error(error)
-        setViolations([])
+      if (cachedViolations) {
+        setViolations(cachedViolations)
         setViolationsLoading(false)
-        return
+      } else {
+        setViolationsLoading(true)
       }
 
-      setViolations(data ?? [])
-      setViolationsLoading(false)
+      try {
+        const { data, error } = await safeSupabase(
+          () =>
+            supabase
+              .from('violations')
+              .select(
+                'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
+              )
+              .eq('user_id', user.id)
+              .eq('is_revoked', false)
+              .order('created_at', { ascending: false }),
+          {
+            timeoutMs: 5000,
+            retries: 0,
+            timeoutMessage: 'История нарушений загружается слишком долго',
+          }
+        )
+
+        if (!isMounted) return
+
+        if (error) {
+          throw error
+        }
+
+        const nextViolations = data ?? []
+        setViolations(nextViolations)
+        writeDataCache(cacheKey, nextViolations)
+      } catch (error) {
+        console.error(error)
+        if (!cachedViolations && isMounted) {
+          setViolations([])
+        }
+      } finally {
+        if (isMounted) {
+          setViolationsLoading(false)
+        }
+      }
     }
 
     loadViolations()
@@ -430,26 +470,34 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
     setTelegramSectionLoading(true)
 
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .select(PROFILE_SELECT_QUERY)
-      .eq('id', user.id)
-      .single()
+    try {
+      const { data: profileData, error: profileError } = await safeSupabase(
+        () =>
+          supabase
+            .from('profiles')
+            .select(PROFILE_SELECT_QUERY)
+            .eq('id', user.id)
+            .single(),
+        {
+          timeoutMs: 5000,
+          retries: 0,
+          timeoutMessage: 'Статус Telegram загружается слишком долго',
+        }
+      )
 
-    if (profileError) {
-      console.error(profileError)
+      if (profileError) {
+        throw profileError
+      }
+
+      setProfileView(profileData)
+      writeCachedProfile(user.id, profileData)
+    } catch (error) {
+      console.error(error)
+      setTelegramMessage(error?.message || 'Не удалось обновить статус Telegram')
+    } finally {
       setTelegramSectionLoading(false)
-      return
     }
-
-    setProfileView(profileData)
-    writeCachedProfile(user.id, profileData)
-    setTelegramSectionLoading(false)
   }, [user])
-
-  useEffect(() => {
-    loadTelegramState()
-  }, [loadTelegramState])
 
   const isAdmin = profileView?.role === 'admin'
 
@@ -520,32 +568,44 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return false
     }
 
-    const { data, error: updateError } = await supabase
-      .from('profiles')
-      .update({
-        avatar_path: path,
-      })
-      .eq('id', user.id)
-      .select(PROFILE_SELECT_QUERY)
-      .single()
+    try {
+      const { data, error: updateError } = await safeSupabase(
+        () =>
+          supabase
+            .from('profiles')
+            .update({
+              avatar_path: path,
+            })
+            .eq('id', user.id)
+            .select(PROFILE_SELECT_QUERY)
+            .single(),
+        {
+          timeoutMs: 6000,
+          retries: 0,
+          timeoutMessage: 'Сохранение аватара заняло слишком много времени',
+        }
+      )
 
-    if (updateError || !data) {
-      console.error(updateError)
-      setAvatarSaving(false)
-      setAvatarError('Не удалось сохранить путь аватара в профиле')
+      if (updateError || !data) {
+        throw updateError || new Error('Не удалось сохранить путь аватара')
+      }
+
+      setProfileView(data)
+      writeCachedProfile(user.id, data)
+      setAvatarMessage('Аватар успешно обновлён')
+
+      if (previousAvatarPath && previousAvatarPath !== path) {
+        removeAvatarByPath(previousAvatarPath)
+      }
+
+      return true
+    } catch (error) {
+      console.error(error)
+      setAvatarError(error?.message || 'Не удалось сохранить аватар')
       return false
+    } finally {
+      setAvatarSaving(false)
     }
-
-    setProfileView(data)
-    writeCachedProfile(user.id, data)
-    setAvatarSaving(false)
-    setAvatarMessage('Аватар успешно обновлён')
-
-    if (previousAvatarPath && previousAvatarPath !== path) {
-      removeAvatarByPath(previousAvatarPath)
-    }
-
-    return true
   }
 
   async function handleAvatarShapeChange(nextShape) {
@@ -554,24 +614,41 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return
     }
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({
-        avatar_shape: nextShape,
-      })
-      .eq('id', user.id)
-      .select(PROFILE_SELECT_QUERY)
-      .single()
+    setShapeSaving(true)
+    setAvatarError('')
+    setAvatarMessage('')
 
-    if (error || !data) {
+    try {
+      const { data, error } = await safeSupabase(
+        () =>
+          supabase
+            .from('profiles')
+            .update({
+              avatar_shape: nextShape,
+            })
+            .eq('id', user.id)
+            .select(PROFILE_SELECT_QUERY)
+            .single(),
+        {
+          timeoutMs: 5000,
+          retries: 0,
+          timeoutMessage: 'Сохранение формы аватара заняло слишком много времени',
+        }
+      )
+
+      if (error || !data) {
+        throw error || new Error('Не удалось сохранить форму аватара')
+      }
+
+      setProfileView(data)
+      writeCachedProfile(user.id, data)
+      setAvatarMessage('Форма аватара обновлена')
+    } catch (error) {
       console.error(error)
-      setAvatarError('Не удалось сохранить форму аватара')
-      return
+      setAvatarError(error?.message || 'Не удалось сохранить форму аватара')
+    } finally {
+      setShapeSaving(false)
     }
-
-    setProfileView(data)
-    writeCachedProfile(user.id, data)
-    setAvatarMessage('Форма аватара обновлена')
   }
 
   async function handleCreateTelegramCode() {
@@ -583,25 +660,35 @@ export default function AccountPage({ user, profile, profileLoading }) {
     setTelegramActionLoading(true)
     setTelegramMessage('')
 
-    const { data, error } = await supabase.rpc('create_telegram_link_code')
+    try {
+      const { data, error } = await safeSupabase(
+        () => supabase.rpc('create_telegram_link_code'),
+        {
+          timeoutMs: 5000,
+          retries: 0,
+          timeoutMessage: 'Создание кода заняло слишком много времени',
+        }
+      )
 
-    setTelegramActionLoading(false)
+      if (error) {
+        throw error
+      }
 
-    if (error) {
+      const nextRow = Array.isArray(data) ? data[0] : null
+
+      if (!nextRow?.code) {
+        setTelegramMessage('Код не был создан')
+        return
+      }
+
+      setTelegramMessage('Код создан. Открываем Telegram-бота...')
+      openTelegramBot(nextRow.code)
+    } catch (error) {
       console.error(error)
-      setTelegramMessage('Не удалось создать код привязки')
-      return
+      setTelegramMessage(error?.message || 'Не удалось создать код привязки')
+    } finally {
+      setTelegramActionLoading(false)
     }
-
-    const nextRow = Array.isArray(data) ? data[0] : null
-
-    if (!nextRow?.code) {
-      setTelegramMessage('Код не был создан')
-      return
-    }
-
-    setTelegramMessage('Код создан. Открываем Telegram-бота...')
-    openTelegramBot(nextRow.code)
   }
 
   async function handleCopyTelegramUsername() {
@@ -623,18 +710,28 @@ export default function AccountPage({ user, profile, profileLoading }) {
     setTelegramActionLoading(true)
     setTelegramMessage('')
 
-    const { error } = await supabase.rpc('unlink_telegram_account')
+    try {
+      const { error } = await safeSupabase(
+        () => supabase.rpc('unlink_telegram_account'),
+        {
+          timeoutMs: 5000,
+          retries: 0,
+          timeoutMessage: 'Отвязка Telegram заняла слишком много времени',
+        }
+      )
 
-    setTelegramActionLoading(false)
+      if (error) {
+        throw error
+      }
 
-    if (error) {
+      await loadTelegramState()
+      setTelegramMessage('Telegram успешно отвязан')
+    } catch (error) {
       console.error(error)
-      setTelegramMessage('Не удалось отвязать Telegram')
-      return
+      setTelegramMessage(error?.message || 'Не удалось отвязать Telegram')
+    } finally {
+      setTelegramActionLoading(false)
     }
-
-    await loadTelegramState()
-    setTelegramMessage('Telegram успешно отвязан')
   }
 
   async function handleRefreshTelegram() {
@@ -674,32 +771,52 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
     setPasswordLoading(true)
 
-    const { error: verifyError } = await supabase.auth.signInWithPassword({
-      email: user.email,
-      password: currentPassword,
-    })
+    try {
+      const { error: verifyError } = await safeSupabase(
+        () =>
+          supabase.auth.signInWithPassword({
+            email: user.email,
+            password: currentPassword,
+          }),
+        {
+          timeoutMs: 6000,
+          retries: 0,
+          timeoutMessage: 'Проверка текущего пароля заняла слишком много времени',
+        }
+      )
 
-    if (verifyError) {
+      if (verifyError) {
+        setPasswordError('Текущий пароль введён неверно')
+        setPasswordLoading(false)
+        return
+      }
+
+      const { error: updateError } = await safeSupabase(
+        () =>
+          supabase.auth.updateUser({
+            password: newPassword,
+          }),
+        {
+          timeoutMs: 6000,
+          retries: 0,
+          timeoutMessage: 'Смена пароля заняла слишком много времени',
+        }
+      )
+
+      if (updateError) {
+        throw updateError
+      }
+
+      setCurrentPassword('')
+      setNewPassword('')
+      setRepeatPassword('')
+      setPasswordMessage('Пароль успешно изменён')
+    } catch (error) {
+      console.error(error)
+      setPasswordError(error?.message || 'Не удалось изменить пароль')
+    } finally {
       setPasswordLoading(false)
-      setPasswordError('Текущий пароль введён неверно')
-      return
     }
-
-    const { error: updateError } = await supabase.auth.updateUser({
-      password: newPassword,
-    })
-
-    setPasswordLoading(false)
-
-    if (updateError) {
-      setPasswordError(updateError.message)
-      return
-    }
-
-    setCurrentPassword('')
-    setNewPassword('')
-    setRepeatPassword('')
-    setPasswordMessage('Пароль успешно изменён')
   }
 
   return (

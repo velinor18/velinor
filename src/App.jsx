@@ -13,7 +13,7 @@ import ChatPage from './pages/ChatPage'
 import ReviewsPage from './pages/ReviewsPage'
 import AdminViolationsPage from './pages/AdminViolationsPage'
 import { supabase } from './lib/supabase'
-import { safeSupabase, sleep } from './lib/asyncData'
+import { safeSupabase } from './lib/asyncData'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
 
@@ -58,14 +58,6 @@ function writeCachedProfile(userId, nextProfile) {
   }
 }
 
-function clearCachedProfile(userId) {
-  try {
-    localStorage.removeItem(getProfileCacheKey(userId))
-  } catch {
-    // ignore
-  }
-}
-
 export default function App() {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -76,10 +68,12 @@ export default function App() {
     let isMounted = true
     let subscription = null
 
-    const bootstrap = async () => {
+    async function bootstrap() {
       if (!supabase) {
         if (isMounted) {
           setAuthLoading(false)
+          setProfile(null)
+          setUser(null)
         }
         return
       }
@@ -88,8 +82,8 @@ export default function App() {
         const {
           data: { session },
         } = await safeSupabase(() => supabase.auth.getSession(), {
-          timeoutMs: 7000,
-          retries: 1,
+          timeoutMs: 4500,
+          retries: 0,
           timeoutMessage: 'Не удалось быстро получить сессию',
         })
 
@@ -102,6 +96,8 @@ export default function App() {
           const cachedProfile = readCachedProfile(nextUser.id)
           if (cachedProfile) {
             setProfile(cachedProfile)
+          } else {
+            setProfile(null)
           }
         } else {
           setProfile(null)
@@ -121,11 +117,11 @@ export default function App() {
       const authListener = supabase.auth.onAuthStateChange((_event, nextSession) => {
         if (!isMounted) return
 
-        const authUser = nextSession?.user ?? null
-        setUser(authUser)
+        const nextUser = nextSession?.user ?? null
+        setUser(nextUser)
 
-        if (authUser) {
-          const cachedProfile = readCachedProfile(authUser.id)
+        if (nextUser) {
+          const cachedProfile = readCachedProfile(nextUser.id)
           setProfile(cachedProfile ?? null)
         } else {
           setProfile(null)
@@ -141,7 +137,6 @@ export default function App() {
 
     return () => {
       isMounted = false
-
       if (subscription) {
         subscription.unsubscribe()
       }
@@ -151,7 +146,7 @@ export default function App() {
   useEffect(() => {
     let isMounted = true
 
-    const loadProfile = async () => {
+    async function loadProfile() {
       if (!supabase || !user) {
         if (isMounted) {
           setProfile(null)
@@ -169,57 +164,44 @@ export default function App() {
         setProfileLoading(true)
       }
 
-      let lastError = null
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          const { data, error } = await safeSupabase(
-            () =>
-              supabase
-                .from('profiles')
-                .select(PROFILE_SELECT_QUERY)
-                .eq('id', user.id)
-                .maybeSingle(),
-            {
-              timeoutMs: 7000,
-              retries: 0,
-              timeoutMessage: 'Профиль загружается слишком долго',
-            }
-          )
-
-          if (!isMounted) return
-
-          if (error && error.code !== 'PGRST116') {
-            throw error
+      try {
+        const { data, error } = await safeSupabase(
+          () =>
+            supabase
+              .from('profiles')
+              .select(PROFILE_SELECT_QUERY)
+              .eq('id', user.id)
+              .maybeSingle(),
+          {
+            timeoutMs: 5000,
+            retries: 0,
+            timeoutMessage: 'Профиль загружается слишком долго',
           }
+        )
 
-          if (data) {
-            setProfile(data)
-            writeCachedProfile(user.id, data)
-          }
+        if (!isMounted) return
 
-          setProfileLoading(false)
-          return
-        } catch (error) {
-          lastError = error
-          console.error(error)
-
-          if (attempt < 1) {
-            await sleep(250)
-          }
+        if (error && error.code !== 'PGRST116') {
+          throw error
         }
-      }
 
-      if (!isMounted) return
+        if (data) {
+          setProfile(data)
+          writeCachedProfile(user.id, data)
+        } else if (!cachedProfile) {
+          setProfile(null)
+        }
+      } catch (error) {
+        console.error(error)
+        if (!isMounted) return
 
-      if (!cachedProfile) {
-        setProfile(null)
-      }
-
-      setProfileLoading(false)
-
-      if (lastError) {
-        console.error(lastError)
+        if (!cachedProfile) {
+          setProfile(null)
+        }
+      } finally {
+        if (isMounted) {
+          setProfileLoading(false)
+        }
       }
     }
 
@@ -230,17 +212,14 @@ export default function App() {
     }
   }, [user])
 
-  useEffect(() => {
-    if (!user?.id) return
-
-    return () => {
-      clearCachedProfile(user.id)
-    }
-  }, [user])
-
   return (
     <div className="min-h-screen bg-black text-white">
-      <Header user={user} profile={profile} authLoading={authLoading} />
+      <Header
+        user={user}
+        profile={profile}
+        authLoading={authLoading}
+        profileLoading={profileLoading}
+      />
 
       <Routes>
         <Route path="/" element={<HomePage user={user} profile={profile} />} />
