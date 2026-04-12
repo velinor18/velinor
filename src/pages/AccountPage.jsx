@@ -17,14 +17,8 @@ import {
   buildTelegramBotUrl,
   TELEGRAM_BOT_USERNAME,
 } from '../lib/telegram'
-import {
-  readDataCache,
-  safeSupabase,
-  writeDataCache,
-} from '../lib/asyncData'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
-const VIOLATIONS_CACHE_PREFIX = 'velinor_account_violations_'
 
 const PROFILE_SELECT_QUERY = `
   id,
@@ -119,10 +113,8 @@ function ViolationDetailsModal({ item, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-fuchsia-500/15 px-6 py-5">
-          <div>
-            <div className="text-2xl font-black text-white">
-              Детали нарушения
-            </div>
+          <div className="text-2xl font-black text-white">
+            Детали нарушения
           </div>
 
           <button
@@ -206,7 +198,7 @@ function TelegramStatusCard({
           disabled={loading || actionLoading}
           className="shrink-0 rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 disabled:opacity-60"
         >
-          Обновить статус
+          Обновить
         </button>
       </div>
 
@@ -293,12 +285,12 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [avatarSaving, setAvatarSaving] = useState(false)
   const [shapeSaving, setShapeSaving] = useState(false)
   const [violations, setViolations] = useState([])
-  const [violationsLoading, setViolationsLoading] = useState(false)
+  const [violationsLoading, setViolationsLoading] = useState(true)
   const [selectedViolation, setSelectedViolation] = useState(null)
   const [avatarMessage, setAvatarMessage] = useState('')
   const [avatarError, setAvatarError] = useState('')
 
-  const [telegramSectionLoading, setTelegramSectionLoading] = useState(false)
+  const [telegramSectionLoading, setTelegramSectionLoading] = useState(true)
   const [telegramActionLoading, setTelegramActionLoading] = useState(false)
   const [telegramMessage, setTelegramMessage] = useState('')
 
@@ -311,9 +303,6 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
   useEffect(() => {
     setProfileView(profile ?? null)
-    if (profile) {
-      setTelegramSectionLoading(false)
-    }
   }, [profile])
 
   useEffect(() => {
@@ -358,33 +347,25 @@ export default function AccountPage({ user, profile, profileLoading }) {
         return
       }
 
-      if (!avatarObjectUrl) {
-        setAvatarLoading(true)
+      setAvatarLoading(true)
+
+      const nextUrl = await downloadAvatarAsObjectUrl(profileView.avatar_path)
+
+      if (!isMounted) {
+        revokeObjectUrl(nextUrl)
+        return
       }
 
-      try {
-        const nextUrl = await downloadAvatarAsObjectUrl(profileView.avatar_path)
-
-        if (!isMounted) {
-          revokeObjectUrl(nextUrl)
-          return
+      setAvatarObjectUrl((prevUrl) => {
+        if (prevUrl && prevUrl !== nextUrl) {
+          revokeObjectUrl(prevUrl)
         }
 
-        setAvatarObjectUrl((prevUrl) => {
-          if (prevUrl && prevUrl !== nextUrl) {
-            revokeObjectUrl(prevUrl)
-          }
+        avatarUrlRef.current = nextUrl || ''
+        return nextUrl || ''
+      })
 
-          avatarUrlRef.current = nextUrl || ''
-          return nextUrl || ''
-        })
-      } catch (error) {
-        console.error(error)
-      } finally {
-        if (isMounted) {
-          setAvatarLoading(false)
-        }
-      }
+      setAvatarLoading(false)
     }
 
     loadAvatar()
@@ -406,53 +387,28 @@ export default function AccountPage({ user, profile, profileLoading }) {
         return
       }
 
-      const cacheKey = `${VIOLATIONS_CACHE_PREFIX}${user.id}`
-      const cachedViolations = readDataCache(cacheKey, 60 * 1000)
+      setViolationsLoading(true)
 
-      if (cachedViolations) {
-        setViolations(cachedViolations)
-        setViolationsLoading(false)
-      } else {
-        setViolationsLoading(true)
-      }
-
-      try {
-        const { data, error } = await safeSupabase(
-          () =>
-            supabase
-              .from('violations')
-              .select(
-                'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
-              )
-              .eq('user_id', user.id)
-              .eq('is_revoked', false)
-              .order('created_at', { ascending: false }),
-          {
-            timeoutMs: 5000,
-            retries: 0,
-            timeoutMessage: 'История нарушений загружается слишком долго',
-          }
+      const { data, error } = await supabase
+        .from('violations')
+        .select(
+          'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
         )
+        .eq('user_id', user.id)
+        .eq('is_revoked', false)
+        .order('created_at', { ascending: false })
 
-        if (!isMounted) return
+      if (!isMounted) return
 
-        if (error) {
-          throw error
-        }
-
-        const nextViolations = data ?? []
-        setViolations(nextViolations)
-        writeDataCache(cacheKey, nextViolations)
-      } catch (error) {
+      if (error) {
         console.error(error)
-        if (!cachedViolations && isMounted) {
-          setViolations([])
-        }
-      } finally {
-        if (isMounted) {
-          setViolationsLoading(false)
-        }
+        setViolations([])
+        setViolationsLoading(false)
+        return
       }
+
+      setViolations(data ?? [])
+      setViolationsLoading(false)
     }
 
     loadViolations()
@@ -470,34 +426,26 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
     setTelegramSectionLoading(true)
 
-    try {
-      const { data: profileData, error: profileError } = await safeSupabase(
-        () =>
-          supabase
-            .from('profiles')
-            .select(PROFILE_SELECT_QUERY)
-            .eq('id', user.id)
-            .single(),
-        {
-          timeoutMs: 5000,
-          retries: 0,
-          timeoutMessage: 'Статус Telegram загружается слишком долго',
-        }
-      )
+    const { data: profileData, error: profileError } = await supabase
+      .from('profiles')
+      .select(PROFILE_SELECT_QUERY)
+      .eq('id', user.id)
+      .single()
 
-      if (profileError) {
-        throw profileError
-      }
-
-      setProfileView(profileData)
-      writeCachedProfile(user.id, profileData)
-    } catch (error) {
-      console.error(error)
-      setTelegramMessage(error?.message || 'Не удалось обновить статус Telegram')
-    } finally {
+    if (profileError) {
+      console.error(profileError)
       setTelegramSectionLoading(false)
+      return
     }
+
+    setProfileView(profileData)
+    writeCachedProfile(user.id, profileData)
+    setTelegramSectionLoading(false)
   }, [user])
+
+  useEffect(() => {
+    loadTelegramState()
+  }, [loadTelegramState])
 
   const isAdmin = profileView?.role === 'admin'
 
@@ -568,44 +516,32 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return false
     }
 
-    try {
-      const { data, error: updateError } = await safeSupabase(
-        () =>
-          supabase
-            .from('profiles')
-            .update({
-              avatar_path: path,
-            })
-            .eq('id', user.id)
-            .select(PROFILE_SELECT_QUERY)
-            .single(),
-        {
-          timeoutMs: 6000,
-          retries: 0,
-          timeoutMessage: 'Сохранение аватара заняло слишком много времени',
-        }
-      )
+    const { data, error: updateError } = await supabase
+      .from('profiles')
+      .update({
+        avatar_path: path,
+      })
+      .eq('id', user.id)
+      .select(PROFILE_SELECT_QUERY)
+      .single()
 
-      if (updateError || !data) {
-        throw updateError || new Error('Не удалось сохранить путь аватара')
-      }
-
-      setProfileView(data)
-      writeCachedProfile(user.id, data)
-      setAvatarMessage('Аватар успешно обновлён')
-
-      if (previousAvatarPath && previousAvatarPath !== path) {
-        removeAvatarByPath(previousAvatarPath)
-      }
-
-      return true
-    } catch (error) {
-      console.error(error)
-      setAvatarError(error?.message || 'Не удалось сохранить аватар')
-      return false
-    } finally {
+    if (updateError || !data) {
+      console.error(updateError)
       setAvatarSaving(false)
+      setAvatarError('Не удалось сохранить путь аватара в профиле')
+      return false
     }
+
+    setProfileView(data)
+    writeCachedProfile(user.id, data)
+    setAvatarSaving(false)
+    setAvatarMessage('Аватар успешно обновлён')
+
+    if (previousAvatarPath && previousAvatarPath !== path) {
+      removeAvatarByPath(previousAvatarPath)
+    }
+
+    return true
   }
 
   async function handleAvatarShapeChange(nextShape) {
@@ -618,37 +554,26 @@ export default function AccountPage({ user, profile, profileLoading }) {
     setAvatarError('')
     setAvatarMessage('')
 
-    try {
-      const { data, error } = await safeSupabase(
-        () =>
-          supabase
-            .from('profiles')
-            .update({
-              avatar_shape: nextShape,
-            })
-            .eq('id', user.id)
-            .select(PROFILE_SELECT_QUERY)
-            .single(),
-        {
-          timeoutMs: 5000,
-          retries: 0,
-          timeoutMessage: 'Сохранение формы аватара заняло слишком много времени',
-        }
-      )
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({
+        avatar_shape: nextShape,
+      })
+      .eq('id', user.id)
+      .select(PROFILE_SELECT_QUERY)
+      .single()
 
-      if (error || !data) {
-        throw error || new Error('Не удалось сохранить форму аватара')
-      }
+    setShapeSaving(false)
 
-      setProfileView(data)
-      writeCachedProfile(user.id, data)
-      setAvatarMessage('Форма аватара обновлена')
-    } catch (error) {
+    if (error || !data) {
       console.error(error)
-      setAvatarError(error?.message || 'Не удалось сохранить форму аватара')
-    } finally {
-      setShapeSaving(false)
+      setAvatarError('Не удалось сохранить форму аватара')
+      return
     }
+
+    setProfileView(data)
+    writeCachedProfile(user.id, data)
+    setAvatarMessage('Форма аватара обновлена')
   }
 
   async function handleCreateTelegramCode() {
@@ -660,35 +585,25 @@ export default function AccountPage({ user, profile, profileLoading }) {
     setTelegramActionLoading(true)
     setTelegramMessage('')
 
-    try {
-      const { data, error } = await safeSupabase(
-        () => supabase.rpc('create_telegram_link_code'),
-        {
-          timeoutMs: 5000,
-          retries: 0,
-          timeoutMessage: 'Создание кода заняло слишком много времени',
-        }
-      )
+    const { data, error } = await supabase.rpc('create_telegram_link_code')
 
-      if (error) {
-        throw error
-      }
+    setTelegramActionLoading(false)
 
-      const nextRow = Array.isArray(data) ? data[0] : null
-
-      if (!nextRow?.code) {
-        setTelegramMessage('Код не был создан')
-        return
-      }
-
-      setTelegramMessage('Код создан. Открываем Telegram-бота...')
-      openTelegramBot(nextRow.code)
-    } catch (error) {
+    if (error) {
       console.error(error)
-      setTelegramMessage(error?.message || 'Не удалось создать код привязки')
-    } finally {
-      setTelegramActionLoading(false)
+      setTelegramMessage('Не удалось создать код привязки')
+      return
     }
+
+    const nextRow = Array.isArray(data) ? data[0] : null
+
+    if (!nextRow?.code) {
+      setTelegramMessage('Код не был создан')
+      return
+    }
+
+    setTelegramMessage('Код создан. Открываем Telegram-бота...')
+    openTelegramBot(nextRow.code)
   }
 
   async function handleCopyTelegramUsername() {
@@ -710,28 +625,18 @@ export default function AccountPage({ user, profile, profileLoading }) {
     setTelegramActionLoading(true)
     setTelegramMessage('')
 
-    try {
-      const { error } = await safeSupabase(
-        () => supabase.rpc('unlink_telegram_account'),
-        {
-          timeoutMs: 5000,
-          retries: 0,
-          timeoutMessage: 'Отвязка Telegram заняла слишком много времени',
-        }
-      )
+    const { error } = await supabase.rpc('unlink_telegram_account')
 
-      if (error) {
-        throw error
-      }
+    setTelegramActionLoading(false)
 
-      await loadTelegramState()
-      setTelegramMessage('Telegram успешно отвязан')
-    } catch (error) {
+    if (error) {
       console.error(error)
-      setTelegramMessage(error?.message || 'Не удалось отвязать Telegram')
-    } finally {
-      setTelegramActionLoading(false)
+      setTelegramMessage('Не удалось отвязать Telegram')
+      return
     }
+
+    await loadTelegramState()
+    setTelegramMessage('Telegram успешно отвязан')
   }
 
   async function handleRefreshTelegram() {
@@ -771,56 +676,36 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
     setPasswordLoading(true)
 
-    try {
-      const { error: verifyError } = await safeSupabase(
-        () =>
-          supabase.auth.signInWithPassword({
-            email: user.email,
-            password: currentPassword,
-          }),
-        {
-          timeoutMs: 6000,
-          retries: 0,
-          timeoutMessage: 'Проверка текущего пароля заняла слишком много времени',
-        }
-      )
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword,
+    })
 
-      if (verifyError) {
-        setPasswordError('Текущий пароль введён неверно')
-        setPasswordLoading(false)
-        return
-      }
-
-      const { error: updateError } = await safeSupabase(
-        () =>
-          supabase.auth.updateUser({
-            password: newPassword,
-          }),
-        {
-          timeoutMs: 6000,
-          retries: 0,
-          timeoutMessage: 'Смена пароля заняла слишком много времени',
-        }
-      )
-
-      if (updateError) {
-        throw updateError
-      }
-
-      setCurrentPassword('')
-      setNewPassword('')
-      setRepeatPassword('')
-      setPasswordMessage('Пароль успешно изменён')
-    } catch (error) {
-      console.error(error)
-      setPasswordError(error?.message || 'Не удалось изменить пароль')
-    } finally {
+    if (verifyError) {
       setPasswordLoading(false)
+      setPasswordError('Текущий пароль введён неверно')
+      return
     }
+
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword,
+    })
+
+    setPasswordLoading(false)
+
+    if (updateError) {
+      setPasswordError(updateError.message)
+      return
+    }
+
+    setCurrentPassword('')
+    setNewPassword('')
+    setRepeatPassword('')
+    setPasswordMessage('Пароль успешно изменён')
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
       <div className="grid gap-8 xl:grid-cols-[360px_minmax(0,1fr)]">
         <AvatarUploader
           username={profileView?.username ?? user?.email ?? '—'}
@@ -833,9 +718,14 @@ export default function AccountPage({ user, profile, profileLoading }) {
           onShapeChange={handleAvatarShapeChange}
         />
 
-        <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-8 shadow-[0_0_60px_rgba(168,85,247,0.08)]">
-          <div className="flex items-start justify-between gap-4">
-            <h1 className="text-4xl font-black">Профиль</h1>
+        <div className="rounded-[32px] border border-fuchsia-500/15 bg-zinc-950/80 p-6 shadow-[0_0_60px_rgba(168,85,247,0.08)] sm:p-8">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h1 className="text-4xl font-black">Профиль</h1>
+              <div className="mt-2 text-zinc-500">
+                Управление аккаунтом, Telegram и история нарушений.
+              </div>
+            </div>
 
             <NavLink
               to="/rules"
@@ -913,7 +803,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
               </div>
 
               <p className="mt-4 text-sm leading-6 text-zinc-400">
-                Сердца показывают, сколько подтверждённых нарушений ещё осталось до лимита.
+                Оставшийся лимит до блокировки аккаунта.
               </p>
             </div>
 

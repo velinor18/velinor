@@ -1,18 +1,12 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 
-export default function Header({
-  user,
-  profile,
-  authLoading,
-  profileLoading = false,
-}) {
+export default function Header({ user, profile, authLoading }) {
   const navigate = useNavigate()
   const location = useLocation()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
 
   const isAdmin = profile?.role === 'admin'
-  const canShowAdminLinks = Boolean(user) && !profileLoading && isAdmin
 
   useEffect(() => {
     setIsMobileMenuOpen(false)
@@ -20,21 +14,18 @@ export default function Header({
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false)
 
-  const linkClass = ({ isActive }) =>
-    `shrink-0 whitespace-nowrap rounded-xl border px-4 py-2.5 text-sm font-semibold transition lg:px-5 lg:text-base ${
+  const desktopLinkClass = ({ isActive }) =>
+    `whitespace-nowrap rounded-xl border px-4 py-2.5 text-sm font-semibold transition lg:px-5 lg:text-base ${
       isActive
         ? 'border-fuchsia-400/50 bg-fuchsia-700/20 text-white'
         : 'border-fuchsia-500/20 bg-fuchsia-950/40 text-zinc-200 hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
     }`
 
-  const plainButtonClass =
-    'shrink-0 whitespace-nowrap rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 lg:px-5 lg:text-base'
+  const desktopButtonClass =
+    'whitespace-nowrap rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50 lg:px-5 lg:text-base'
 
-  const mobileButtonClass =
-    'w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-left text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
-
-  const mobileLinkClass =
-    'block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
+  const mobileItemClass =
+    'block w-full rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/40 px-4 py-4 text-left text-base font-semibold text-zinc-100 transition hover:border-fuchsia-400/40 hover:bg-fuchsia-900/50'
 
   const goToHomeSection = (sectionId) => {
     closeMobileMenu()
@@ -46,7 +37,7 @@ export default function Header({
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'start' })
         }
-      }, 120)
+      }, 140)
       return
     }
 
@@ -63,7 +54,7 @@ export default function Header({
       navigate('/')
       setTimeout(() => {
         window.scrollTo({ top: 0, behavior: 'smooth' })
-      }, 120)
+      }, 140)
       return
     }
 
@@ -77,7 +68,7 @@ export default function Header({
       navigate('/')
       setTimeout(() => {
         window.dispatchEvent(new Event('openPurchasesModal'))
-      }, 120)
+      }, 150)
       return
     }
 
@@ -87,7 +78,7 @@ export default function Header({
   return (
     <>
       <header className="sticky top-0 z-40 border-b border-fuchsia-700/20 bg-black/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[1540px] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:gap-10 lg:px-8">
+        <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:gap-10 lg:px-8">
           <button
             onClick={goHomeTop}
             className="flex shrink-0 items-center gap-3 text-left"
@@ -101,66 +92,66 @@ export default function Header({
             </div>
           </button>
 
-          <nav className="hidden min-w-0 flex-1 items-center justify-end gap-3 md:flex">
-            <button onClick={() => goToHomeSection('hero')} className={plainButtonClass}>
+          <nav className="hidden min-w-0 flex-1 items-center justify-end gap-3 md:flex md:flex-wrap">
+            <button onClick={() => goToHomeSection('hero')} className={desktopButtonClass}>
               Главная
             </button>
 
-            <button onClick={() => goToHomeSection('tariffs')} className={plainButtonClass}>
+            <button onClick={() => goToHomeSection('tariffs')} className={desktopButtonClass}>
               Тарифы
             </button>
 
-            <NavLink to="/reviews" className={linkClass}>
+            <NavLink to="/reviews" className={desktopLinkClass}>
               Отзывы
             </NavLink>
 
-            <button onClick={openPurchasesModal} className={plainButtonClass}>
+            <button onClick={openPurchasesModal} className={desktopButtonClass}>
               Мои покупки
             </button>
 
-            <NavLink to="/rules" className={linkClass}>
+            <NavLink to="/rules" className={desktopLinkClass}>
               Правила
             </NavLink>
 
-            {!authLoading && user && (
-              <NavLink to="/chat" className={linkClass}>
+            {!authLoading && user ? (
+              <NavLink to="/chat" className={desktopLinkClass}>
                 Чат
               </NavLink>
-            )}
+            ) : null}
 
-            <button onClick={() => goToHomeSection('support')} className={plainButtonClass}>
+            <button onClick={() => goToHomeSection('support')} className={desktopButtonClass}>
               Поддержка
             </button>
 
-            {!authLoading && !user && (
+            {!authLoading && !user ? (
               <>
-                <NavLink to="/login" className={linkClass}>
+                <NavLink to="/login" className={desktopLinkClass}>
                   Вход
                 </NavLink>
 
-                <NavLink to="/register" className={linkClass}>
+                <NavLink to="/register" className={desktopLinkClass}>
                   Регистрация
                 </NavLink>
               </>
-            )}
+            ) : null}
 
-            {!authLoading && user && (
-              <NavLink to="/profile" className={linkClass}>
+            {!authLoading && user ? (
+              <NavLink to="/profile" className={desktopLinkClass}>
                 Профиль
               </NavLink>
-            )}
+            ) : null}
 
-            {canShowAdminLinks && (
+            {!authLoading && user && isAdmin ? (
               <>
-                <NavLink to="/requests" className={linkClass}>
+                <NavLink to="/requests" className={desktopLinkClass}>
                   Заявки
                 </NavLink>
 
-                <NavLink to="/violations" className={linkClass}>
+                <NavLink to="/violations" className={desktopLinkClass}>
                   Нарушения
                 </NavLink>
               </>
-            )}
+            ) : null}
           </nav>
 
           <button
@@ -173,7 +164,7 @@ export default function Header({
         </div>
       </header>
 
-      {isMobileMenuOpen && (
+      {isMobileMenuOpen ? (
         <div className="fixed inset-0 z-50 md:hidden">
           <div
             className="absolute inset-0 bg-black/70 backdrop-blur-sm"
@@ -197,14 +188,14 @@ export default function Header({
             <div className="space-y-3">
               <button
                 onClick={() => goToHomeSection('hero')}
-                className={mobileButtonClass}
+                className={mobileItemClass}
               >
                 Главная
               </button>
 
               <button
                 onClick={() => goToHomeSection('tariffs')}
-                className={mobileButtonClass}
+                className={mobileItemClass}
               >
                 Тарифы
               </button>
@@ -212,14 +203,14 @@ export default function Header({
               <NavLink
                 to="/reviews"
                 onClick={closeMobileMenu}
-                className={mobileLinkClass}
+                className={mobileItemClass}
               >
                 Отзывы
               </NavLink>
 
               <button
                 onClick={openPurchasesModal}
-                className={mobileButtonClass}
+                className={mobileItemClass}
               >
                 Мои покупки
               </button>
@@ -227,34 +218,34 @@ export default function Header({
               <NavLink
                 to="/rules"
                 onClick={closeMobileMenu}
-                className={mobileLinkClass}
+                className={mobileItemClass}
               >
                 Правила
               </NavLink>
 
-              {!authLoading && user && (
+              {!authLoading && user ? (
                 <NavLink
                   to="/chat"
                   onClick={closeMobileMenu}
-                  className={mobileLinkClass}
+                  className={mobileItemClass}
                 >
                   Чат
                 </NavLink>
-              )}
+              ) : null}
 
               <button
                 onClick={() => goToHomeSection('support')}
-                className={mobileButtonClass}
+                className={mobileItemClass}
               >
                 Поддержка
               </button>
 
-              {!authLoading && !user && (
+              {!authLoading && !user ? (
                 <>
                   <NavLink
                     to="/login"
                     onClick={closeMobileMenu}
-                    className={mobileLinkClass}
+                    className={mobileItemClass}
                   >
                     Вход
                   </NavLink>
@@ -262,29 +253,29 @@ export default function Header({
                   <NavLink
                     to="/register"
                     onClick={closeMobileMenu}
-                    className={mobileLinkClass}
+                    className={mobileItemClass}
                   >
                     Регистрация
                   </NavLink>
                 </>
-              )}
+              ) : null}
 
-              {!authLoading && user && (
+              {!authLoading && user ? (
                 <NavLink
                   to="/profile"
                   onClick={closeMobileMenu}
-                  className={mobileLinkClass}
+                  className={mobileItemClass}
                 >
                   Профиль
                 </NavLink>
-              )}
+              ) : null}
 
-              {canShowAdminLinks && (
+              {!authLoading && user && isAdmin ? (
                 <>
                   <NavLink
                     to="/requests"
                     onClick={closeMobileMenu}
-                    className={mobileLinkClass}
+                    className={mobileItemClass}
                   >
                     Заявки
                   </NavLink>
@@ -292,16 +283,16 @@ export default function Header({
                   <NavLink
                     to="/violations"
                     onClick={closeMobileMenu}
-                    className={mobileLinkClass}
+                    className={mobileItemClass}
                   >
                     Нарушения
                   </NavLink>
                 </>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </>
   )
 }

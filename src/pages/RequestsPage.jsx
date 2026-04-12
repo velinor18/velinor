@@ -35,6 +35,21 @@ function getStatusLabel(status) {
   return 'На проверке'
 }
 
+function StatusBadge({ status }) {
+  const className =
+    status === 'approved'
+      ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+      : status === 'rejected'
+        ? 'border-red-400/20 bg-red-500/10 text-red-100'
+        : 'border-yellow-400/20 bg-yellow-500/10 text-yellow-100'
+
+  return (
+    <div className={`inline-flex rounded-full border px-3 py-2 text-xs font-bold uppercase tracking-wide ${className}`}>
+      {getStatusLabel(status)}
+    </div>
+  )
+}
+
 function ImagePreviewModal({ item, loading, onClose }) {
   if (!item && !loading) return null
 
@@ -191,21 +206,6 @@ function RejectPaymentModal({
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-function StatusBadge({ status }) {
-  const className =
-    status === 'approved'
-      ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-      : status === 'rejected'
-        ? 'border-red-400/20 bg-red-500/10 text-red-100'
-        : 'border-yellow-400/20 bg-yellow-500/10 text-yellow-100'
-
-  return (
-    <div className={`inline-flex rounded-full border px-3 py-2 text-xs font-bold uppercase tracking-wide ${className}`}>
-      {getStatusLabel(status)}
     </div>
   )
 }
