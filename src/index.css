@@ -19,3 +19,288 @@ body {
 #root {
   min-height: 100vh;
 }
+
+.velinor-brand-title {
+  position: relative;
+  display: inline-block;
+  isolation: isolate;
+  padding: 0 0.08em;
+  vertical-align: baseline;
+}
+
+.velinor-brand-title__text {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+  background: linear-gradient(
+    90deg,
+    #c4b5fd 0%,
+    #f0abfc 28%,
+    #ffffff 48%,
+    #f472b6 68%,
+    #c4b5fd 100%
+  );
+  background-size: 240% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  text-shadow:
+    0 0 24px rgba(217, 70, 239, 0.35),
+    0 0 48px rgba(168, 85, 247, 0.22);
+  animation:
+    velinorBrandGradient 9s ease-in-out infinite,
+    velinorBrandBreath 7s ease-in-out infinite;
+}
+
+.velinor-brand-title__halo {
+  position: absolute;
+  z-index: 0;
+  inset: 0.1em -0.08em 0.02em;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 25% 50%, rgba(168, 85, 247, 0.55), transparent 42%),
+    radial-gradient(circle at 70% 45%, rgba(236, 72, 153, 0.48), transparent 46%),
+    radial-gradient(circle at 50% 60%, rgba(255, 255, 255, 0.2), transparent 58%);
+  filter: blur(18px);
+  opacity: 0.72;
+  transform: scale(1.04);
+  animation: velinorBrandHalo 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.velinor-brand-title__scan {
+  position: absolute;
+  z-index: 3;
+  inset: -0.04em -0.18em;
+  border-radius: 0.32em;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    transparent 38%,
+    rgba(255, 255, 255, 0.75) 48%,
+    rgba(240, 171, 252, 0.45) 53%,
+    transparent 64%,
+    transparent 100%
+  );
+  mix-blend-mode: screen;
+  opacity: 0;
+  transform: translateX(-130%) skewX(-18deg);
+  animation: velinorBrandScan 10s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.velinor-brand-title__spark {
+  position: absolute;
+  z-index: 4;
+  width: 0.13em;
+  height: 0.13em;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 0 10px rgba(255, 255, 255, 0.9),
+    0 0 22px rgba(217, 70, 239, 0.9),
+    0 0 34px rgba(168, 85, 247, 0.6);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.velinor-brand-title__spark--one {
+  animation: velinorSparkOne 8.8s ease-in-out infinite;
+}
+
+.velinor-brand-title__spark--two {
+  animation: velinorSparkTwo 11s ease-in-out infinite;
+  animation-delay: -3.4s;
+}
+
+.velinor-brand-title__spark--three {
+  animation: velinorSparkThree 9.8s ease-in-out infinite;
+  animation-delay: -5.8s;
+}
+
+@keyframes velinorBrandGradient {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes velinorBrandBreath {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  50% {
+    transform: translateY(-0.025em) scale(1.015);
+  }
+}
+
+@keyframes velinorBrandHalo {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.9;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes velinorBrandScan {
+  0%,
+  68% {
+    opacity: 0;
+    transform: translateX(-130%) skewX(-18deg);
+  }
+
+  74% {
+    opacity: 0.58;
+  }
+
+  82% {
+    opacity: 0;
+    transform: translateX(130%) skewX(-18deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(130%) skewX(-18deg);
+  }
+}
+
+@keyframes velinorSparkOne {
+  0%,
+  100% {
+    left: 8%;
+    top: 8%;
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  12% {
+    opacity: 0.95;
+  }
+
+  28% {
+    left: 44%;
+    top: -10%;
+    opacity: 0.75;
+    transform: scale(0.9);
+  }
+
+  48% {
+    left: 96%;
+    top: 22%;
+    opacity: 0.95;
+    transform: scale(1);
+  }
+
+  68% {
+    left: 72%;
+    top: 98%;
+    opacity: 0.7;
+    transform: scale(0.75);
+  }
+
+  88% {
+    left: 16%;
+    top: 82%;
+    opacity: 0.5;
+    transform: scale(0.65);
+  }
+}
+
+@keyframes velinorSparkTwo {
+  0%,
+  100% {
+    left: 82%;
+    top: 0%;
+    opacity: 0;
+    transform: scale(0.45);
+  }
+
+  16% {
+    opacity: 0.8;
+  }
+
+  36% {
+    left: 102%;
+    top: 58%;
+    opacity: 0.9;
+    transform: scale(0.95);
+  }
+
+  58% {
+    left: 48%;
+    top: 108%;
+    opacity: 0.65;
+    transform: scale(0.7);
+  }
+
+  78% {
+    left: -4%;
+    top: 44%;
+    opacity: 0.85;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes velinorSparkThree {
+  0%,
+  100% {
+    left: 18%;
+    top: 96%;
+    opacity: 0;
+    transform: scale(0.45);
+  }
+
+  18% {
+    opacity: 0.75;
+  }
+
+  42% {
+    left: -2%;
+    top: 30%;
+    opacity: 0.85;
+    transform: scale(0.8);
+  }
+
+  62% {
+    left: 54%;
+    top: -8%;
+    opacity: 0.95;
+    transform: scale(1);
+  }
+
+  84% {
+    left: 92%;
+    top: 72%;
+    opacity: 0.55;
+    transform: scale(0.65);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .velinor-brand-title__text,
+  .velinor-brand-title__halo,
+  .velinor-brand-title__scan,
+  .velinor-brand-title__spark {
+    animation: none;
+  }
+
+  .velinor-brand-title__halo {
+    opacity: 0.55;
+  }
+
+  .velinor-brand-title__scan,
+  .velinor-brand-title__spark {
+    display: none;
+  }
+}

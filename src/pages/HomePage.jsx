@@ -172,6 +172,37 @@ function GlowButton({ children, className = '', ...props }) {
   )
 }
 
+function AnimatedBrandTitle({ children }) {
+  const label = String(children)
+
+  return (
+    <span className="velinor-brand-title" aria-label={label}>
+      <span className="velinor-brand-title__halo" aria-hidden="true" />
+
+      <span className="velinor-brand-title__text" aria-hidden="true">
+        {children}
+      </span>
+
+      <span className="velinor-brand-title__scan" aria-hidden="true" />
+
+      <span
+        className="velinor-brand-title__spark velinor-brand-title__spark--one"
+        aria-hidden="true"
+      />
+
+      <span
+        className="velinor-brand-title__spark velinor-brand-title__spark--two"
+        aria-hidden="true"
+      />
+
+      <span
+        className="velinor-brand-title__spark velinor-brand-title__spark--three"
+        aria-hidden="true"
+      />
+    </span>
+  )
+}
+
 function SectionTitle({ title, subtitle }) {
   return (
     <div className="text-center">
@@ -821,10 +852,7 @@ export default function HomePage({ user, profile }) {
         >
           <div className="max-w-5xl text-center">
             <h1 className="text-5xl font-black leading-tight text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.18)] sm:text-7xl">
-              Добро пожаловать в{' '}
-              <span className="bg-gradient-to-r from-violet-300 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent">
-                velinor
-              </span>
+              Добро пожаловать в <AnimatedBrandTitle>velinor</AnimatedBrandTitle>
             </h1>
 
             <p className="mx-auto mt-8 max-w-3xl text-xl leading-9 text-zinc-300 sm:text-2xl">
