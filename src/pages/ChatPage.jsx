@@ -12,6 +12,49 @@ const MESSAGE_SELECT_QUERY =
   'id, user_id, username, avatar_path, avatar_shape, message_text, created_at'
 
 const PROFILE_SNAPSHOT_SELECT_QUERY = 'id, username, avatar_path, avatar_shape'
+const PROFILE_SNAPSHOT_CACHE_PREFIX = 'velinor_chat_profile_snapshot_'
+const PROFILE_SNAPSHOT_CACHE_MAX_AGE_MS = 15 * 60 * 1000
+
+function getProfileSnapshotCacheKey(userId) {
+  return `${PROFILE_SNAPSHOT_CACHE_PREFIX}${userId}`
+}
+
+function readCachedProfileSnapshot(userId) {
+  try {
+    const raw = localStorage.getItem(getProfileSnapshotCacheKey(userId))
+    if (!raw) return null
+
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+
+    const savedAt = Number(parsed.savedAt || 0)
+    if (Date.now() - savedAt > PROFILE_SNAPSHOT_CACHE_MAX_AGE_MS) {
+      return null
+    }
+
+    if (!parsed.value?.id) return null
+
+    return parsed.value
+  } catch {
+    return null
+  }
+}
+
+function writeCachedProfileSnapshot(snapshot) {
+  if (!snapshot?.id) return
+
+  try {
+    localStorage.setItem(
+      getProfileSnapshotCacheKey(snapshot.id),
+      JSON.stringify({
+        savedAt: Date.now(),
+        value: snapshot,
+      })
+    )
+  } catch {
+    // ignore cache write errors
+  }
+}
 
 function getAvatarShapeClass(shape) {
   const normalized = normalizeAvatarShape(shape)
@@ -64,20 +107,38 @@ function formatRestrictionUntil(blockedUntil) {
   return dateValue.toLocaleString('ru-RU')
 }
 
+function buildEmbeddedProfileSnapshot(item) {
+  if (!item?.user_id) return null
+
+  return {
+    id: item.user_id,
+    username: item.username,
+    avatar_path: item.avatar_path,
+    avatar_shape: item.avatar_shape,
+  }
+}
+
 function MessageAvatar({ username, avatarUrl, avatarShape }) {
+  const [imageFailed, setImageFailed] = useState(false)
   const shapeClass = getAvatarShapeClass(avatarShape)
+  const canShowImage = Boolean(avatarUrl) && !imageFailed
+
+  useEffect(() => {
+    setImageFailed(false)
+  }, [avatarUrl])
 
   return (
     <div
       className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden border border-fuchsia-500/20 bg-black text-sm font-black uppercase text-fuchsia-300 sm:h-12 sm:w-12 ${shapeClass}`}
     >
-      {avatarUrl ? (
+      {canShowImage ? (
         <img
           src={avatarUrl}
           alt={username}
           className={`h-full w-full object-cover ${shapeClass}`}
           loading="lazy"
           decoding="async"
+          onError={() => setImageFailed(true)}
         />
       ) : (
         <span>{(username || 'U').slice(0, 1)}</span>
@@ -163,14 +224,18 @@ export default function ChatPage({ user, profile }) {
   useEffect(() => {
     if (!user?.id || !profile) return
 
+    const ownSnapshot = {
+      id: user.id,
+      username: profile.username,
+      avatar_path: profile.avatar_path,
+      avatar_shape: profile.avatar_shape,
+    }
+
+    writeCachedProfileSnapshot(ownSnapshot)
+
     setProfilesDirectory((prev) => ({
       ...prev,
-      [user.id]: {
-        id: user.id,
-        username: profile.username,
-        avatar_path: profile.avatar_path,
-        avatar_shape: profile.avatar_shape,
-      },
+      [user.id]: ownSnapshot,
     }))
   }, [
     user?.id,
@@ -179,67 +244,166 @@ export default function ChatPage({ user, profile }) {
     profile?.avatar_shape,
   ])
 
+  useEffect(() => {
+    if (!messages.length) return
+
+    setProfilesDirectory((prev) => {
+      const next = { ...prev }
+      let changed = false
+
+      messages.forEach((item) => {
+        if (!item?.user_id) return
+
+        const embeddedSnapshot = buildEmbeddedProfileSnapshot(item)
+        const existing = next[item.user_id]
+
+        if (!existing && embeddedSnapshot) {
+          next[item.user_id] = embeddedSnapshot
+          changed = true
+          return
+        }
+
+        if (
+          existing &&
+          !existing.avatar_path &&
+          embeddedSnapshot?.avatar_path
+        ) {
+          next[item.user_id] = {
+            ...existing,
+            avatar_path: embeddedSnapshot.avatar_path,
+            avatar_shape:
+              existing.avatar_shape || embeddedSnapshot.avatar_shape,
+            username: existing.username || embeddedSnapshot.username,
+          }
+          changed = true
+        }
+      })
+
+      return changed ? next : prev
+    })
+  }, [messages])
+
   const chatBlocked = isRestrictionActive(
     chatRestriction.isBlocked,
     chatRestriction.blockedUntil
   )
+
+  function mergeProfileSnapshots(items) {
+    const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : []
+    if (!normalizedItems.length) return
+
+    normalizedItems.forEach(writeCachedProfileSnapshot)
+
+    setProfilesDirectory((prev) => {
+      const next = { ...prev }
+
+      normalizedItems.forEach((item) => {
+        if (!item?.id) return
+        next[item.id] = item
+      })
+
+      return next
+    })
+  }
+
+  async function fetchProfileSnapshotsByRpc(userIds) {
+    const { data, error } = await safeSupabase(
+      () =>
+        supabase.rpc('get_chat_profile_snapshots', {
+          p_user_ids: userIds,
+        }),
+      {
+        timeoutMs: 4500,
+        retries: 0,
+        timeoutMessage: 'Профили участников чата загружаются слишком долго',
+      }
+    )
+
+    if (error) {
+      throw error
+    }
+
+    return Array.isArray(data) ? data : []
+  }
+
+  async function fetchProfileSnapshotsBySelect(userIds) {
+    const { data, error } = await safeSupabase(
+      () =>
+        supabase
+          .from('profiles')
+          .select(PROFILE_SNAPSHOT_SELECT_QUERY)
+          .in('id', userIds),
+      {
+        timeoutMs: 4500,
+        retries: 0,
+        timeoutMessage: 'Профили участников чата загружаются слишком долго',
+      }
+    )
+
+    if (error) {
+      throw error
+    }
+
+    return Array.isArray(data) ? data : []
+  }
 
   const loadProfileSnapshotsForMessages = useCallback(
     async (messageItems) => {
       if (!supabase || !messageItems?.length) return
 
       const uniqueUserIds = [
-        ...new Set(
-          messageItems
-            .map((item) => item.user_id)
-            .filter(Boolean)
-            .filter((id) => id !== user?.id)
-            .filter((id) => !requestedProfileIdsRef.current.has(id))
-        ),
+        ...new Set(messageItems.map((item) => item.user_id).filter(Boolean)),
       ]
 
       if (!uniqueUserIds.length) return
 
-      uniqueUserIds.forEach((id) => {
+      const cachedSnapshots = uniqueUserIds
+        .map(readCachedProfileSnapshot)
+        .filter(Boolean)
+
+      if (cachedSnapshots.length) {
+        mergeProfileSnapshots(cachedSnapshots)
+      }
+
+      const idsToLoad = uniqueUserIds.filter(
+        (id) => !requestedProfileIdsRef.current.has(id)
+      )
+
+      if (!idsToLoad.length) return
+
+      idsToLoad.forEach((id) => {
         requestedProfileIdsRef.current.add(id)
       })
 
       try {
-        const { data, error } = await safeSupabase(
-          () =>
-            supabase
-              .from('profiles')
-              .select(PROFILE_SNAPSHOT_SELECT_QUERY)
-              .in('id', uniqueUserIds),
-          {
-            timeoutMs: 5000,
-            retries: 0,
-            timeoutMessage: 'Профили участников чата загружаются слишком долго',
-          }
-        )
+        let loadedSnapshots = []
 
-        if (error) {
-          throw error
+        try {
+          loadedSnapshots = await fetchProfileSnapshotsByRpc(idsToLoad)
+        } catch {
+          loadedSnapshots = await fetchProfileSnapshotsBySelect(idsToLoad)
         }
 
-        setProfilesDirectory((prev) => {
-          const next = { ...prev }
+        mergeProfileSnapshots(loadedSnapshots)
 
-          ;(data ?? []).forEach((item) => {
-            next[item.id] = item
-          })
+        const loadedIds = new Set(
+          loadedSnapshots.map((item) => item?.id).filter(Boolean)
+        )
 
-          return next
+        idsToLoad.forEach((id) => {
+          if (!loadedIds.has(id)) {
+            requestedProfileIdsRef.current.delete(id)
+          }
         })
       } catch (error) {
         console.error(error)
 
-        uniqueUserIds.forEach((id) => {
+        idsToLoad.forEach((id) => {
           requestedProfileIdsRef.current.delete(id)
         })
       }
     },
-    [user?.id]
+    []
   )
 
   function getMessageProfileSnapshot(item) {
@@ -254,7 +418,7 @@ export default function ChatPage({ user, profile }) {
       )
     }
 
-    return profilesDirectory[item.user_id] || null
+    return profilesDirectory[item.user_id] || buildEmbeddedProfileSnapshot(item)
   }
 
   function getMessageAvatarPath(item) {

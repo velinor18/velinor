@@ -45,6 +45,17 @@ function getPersistentCacheKey(bucket, path) {
   return `${SIGNED_URL_CACHE_PREFIX}${bucket}_${path}`
 }
 
+function getPublicStorageUrl(bucket, path) {
+  if (!supabase || !path) return null
+
+  try {
+    const { data } = supabase.storage.from(bucket).getPublicUrl(path)
+    return data?.publicUrl || null
+  } catch {
+    return null
+  }
+}
+
 function isUsableCachedUrl(value) {
   return (
     value &&
@@ -142,7 +153,7 @@ async function createSignedStorageUrl(
       )
 
       if (error || !data?.signedUrl) {
-        return null
+        return getPublicStorageUrl(bucket, path)
       }
 
       const cacheValue = {
@@ -156,7 +167,7 @@ async function createSignedStorageUrl(
       return data.signedUrl
     } catch (error) {
       console.error(error)
-      return null
+      return getPublicStorageUrl(bucket, path)
     }
   })()
 
