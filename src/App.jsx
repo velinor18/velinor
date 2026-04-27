@@ -16,6 +16,7 @@ import { supabase } from './lib/supabase'
 import { safeSupabase } from './lib/asyncData'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
+const PROFILE_LOAD_TIMEOUT_MS = 3500
 
 const PROFILE_SELECT_QUERY = `
   id,
@@ -58,6 +59,14 @@ function writeCachedProfile(userId, nextProfile) {
   }
 }
 
+function clearCachedProfile(userId) {
+  try {
+    localStorage.removeItem(getProfileCacheKey(userId))
+  } catch {
+    // ignore
+  }
+}
+
 export default function App() {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -82,7 +91,7 @@ export default function App() {
         const {
           data: { session },
         } = await safeSupabase(() => supabase.auth.getSession(), {
-          timeoutMs: 4500,
+          timeoutMs: 2500,
           retries: 0,
           timeoutMessage: 'Не удалось быстро получить сессию',
         })
@@ -94,20 +103,20 @@ export default function App() {
 
         if (nextUser) {
           const cachedProfile = readCachedProfile(nextUser.id)
-          if (cachedProfile) {
-            setProfile(cachedProfile)
-          } else {
-            setProfile(null)
-          }
+          setProfile(cachedProfile ?? null)
+          setProfileLoading(!cachedProfile)
         } else {
           setProfile(null)
+          setProfileLoading(false)
         }
       } catch (error) {
         console.error(error)
 
         if (!isMounted) return
+
         setUser(null)
         setProfile(null)
+        setProfileLoading(false)
       } finally {
         if (isMounted) {
           setAuthLoading(false)
@@ -123,8 +132,10 @@ export default function App() {
         if (nextUser) {
           const cachedProfile = readCachedProfile(nextUser.id)
           setProfile(cachedProfile ?? null)
+          setProfileLoading(!cachedProfile)
         } else {
           setProfile(null)
+          setProfileLoading(false)
         }
 
         setAuthLoading(false)
@@ -173,7 +184,7 @@ export default function App() {
               .eq('id', user.id)
               .maybeSingle(),
           {
-            timeoutMs: 5000,
+            timeoutMs: PROFILE_LOAD_TIMEOUT_MS,
             retries: 0,
             timeoutMessage: 'Профиль загружается слишком долго',
           }
@@ -190,9 +201,11 @@ export default function App() {
           writeCachedProfile(user.id, data)
         } else if (!cachedProfile) {
           setProfile(null)
+          clearCachedProfile(user.id)
         }
       } catch (error) {
         console.error(error)
+
         if (!isMounted) return
 
         if (!cachedProfile) {

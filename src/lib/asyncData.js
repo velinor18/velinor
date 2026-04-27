@@ -55,12 +55,12 @@ export async function safeSupabase(factory, options = {}) {
     () =>
       withTimeout(
         factory,
-        options.timeoutMs ?? 8000,
+        options.timeoutMs ?? 6000,
         options.timeoutMessage ?? 'Сервер отвечает слишком долго'
       ),
     {
-      retries: options.retries ?? 1,
-      delayMs: options.delayMs ?? 300,
+      retries: options.retries ?? 0,
+      delayMs: options.delayMs ?? 250,
     }
   )
 }
@@ -104,6 +104,47 @@ export function readDataCache(key, maxAgeMs = 60 * 1000) {
     }
 
     return parsed.value
+  } catch {
+    return null
+  }
+}
+
+export function readStaleDataCache(key) {
+  try {
+    const raw = localStorage.getItem(getCacheKey(key))
+    if (!raw) return null
+
+    const parsed = JSON.parse(raw)
+
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+
+    if (!('value' in parsed)) {
+      return null
+    }
+
+    return parsed.value
+  } catch {
+    return null
+  }
+}
+
+export function readDataCacheMeta(key) {
+  try {
+    const raw = localStorage.getItem(getCacheKey(key))
+    if (!raw) return null
+
+    const parsed = JSON.parse(raw)
+
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+
+    return {
+      savedAt: Number(parsed.savedAt || 0),
+      value: parsed.value,
+    }
   } catch {
     return null
   }

@@ -17,6 +17,7 @@ import {
   buildTelegramBotUrl,
   TELEGRAM_BOT_USERNAME,
 } from '../lib/telegram'
+import { safeSupabase } from '../lib/asyncData'
 
 const PROFILE_CACHE_PREFIX = 'velinor_profile_cache_'
 
@@ -278,6 +279,7 @@ function AdminEmailCard({ email }) {
 export default function AccountPage({ user, profile, profileLoading }) {
   const navigate = useNavigate()
   const avatarUrlRef = useRef('')
+  const profileViewRef = useRef(profile ?? null)
 
   const [profileView, setProfileView] = useState(profile ?? null)
   const [avatarObjectUrl, setAvatarObjectUrl] = useState('')
@@ -290,7 +292,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [avatarMessage, setAvatarMessage] = useState('')
   const [avatarError, setAvatarError] = useState('')
 
-  const [telegramSectionLoading, setTelegramSectionLoading] = useState(true)
+  const [telegramSectionLoading, setTelegramSectionLoading] = useState(!profile)
   const [telegramActionLoading, setTelegramActionLoading] = useState(false)
   const [telegramMessage, setTelegramMessage] = useState('')
 
@@ -302,8 +304,23 @@ export default function AccountPage({ user, profile, profileLoading }) {
   const [passwordError, setPasswordError] = useState('')
 
   useEffect(() => {
-    setProfileView(profile ?? null)
-  }, [profile])
+    profileViewRef.current = profileView
+  }, [profileView])
+
+  useEffect(() => {
+    if (profile) {
+      profileViewRef.current = profile
+      setProfileView(profile)
+      setTelegramSectionLoading(false)
+      return
+    }
+
+    if (!user) {
+      profileViewRef.current = null
+      setProfileView(null)
+      setTelegramSectionLoading(false)
+    }
+  }, [profile, user])
 
   useEffect(() => {
     return () => {
@@ -339,33 +356,42 @@ export default function AccountPage({ user, profile, profileLoading }) {
             if (prevUrl) {
               revokeObjectUrl(prevUrl)
             }
+
             avatarUrlRef.current = ''
             return ''
           })
+
           setAvatarLoading(false)
         }
+
         return
       }
 
       setAvatarLoading(true)
 
-      const nextUrl = await downloadAvatarAsObjectUrl(profileView.avatar_path)
+      try {
+        const nextUrl = await downloadAvatarAsObjectUrl(profileView.avatar_path)
 
-      if (!isMounted) {
-        revokeObjectUrl(nextUrl)
-        return
-      }
-
-      setAvatarObjectUrl((prevUrl) => {
-        if (prevUrl && prevUrl !== nextUrl) {
-          revokeObjectUrl(prevUrl)
+        if (!isMounted) {
+          revokeObjectUrl(nextUrl)
+          return
         }
 
-        avatarUrlRef.current = nextUrl || ''
-        return nextUrl || ''
-      })
+        setAvatarObjectUrl((prevUrl) => {
+          if (prevUrl && prevUrl !== nextUrl) {
+            revokeObjectUrl(prevUrl)
+          }
 
-      setAvatarLoading(false)
+          avatarUrlRef.current = nextUrl || ''
+          return nextUrl || ''
+        })
+      } catch (error) {
+        console.error(error)
+      } finally {
+        if (isMounted) {
+          setAvatarLoading(false)
+        }
+      }
     }
 
     loadAvatar()
@@ -389,26 +415,42 @@ export default function AccountPage({ user, profile, profileLoading }) {
 
       setViolationsLoading(true)
 
-      const { data, error } = await supabase
-        .from('violations')
-        .select(
-          'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
+      try {
+        const { data, error } = await safeSupabase(
+          () =>
+            supabase
+              .from('violations')
+              .select(
+                'id, user_id, source_type, reason_code, reason_text, created_at, is_revoked'
+              )
+              .eq('user_id', user.id)
+              .eq('is_revoked', false)
+              .order('created_at', { ascending: false }),
+          {
+            timeoutMs: 4500,
+            retries: 0,
+            timeoutMessage: 'История нарушений загружается слишком долго',
+          }
         )
-        .eq('user_id', user.id)
-        .eq('is_revoked', false)
-        .order('created_at', { ascending: false })
 
-      if (!isMounted) return
+        if (!isMounted) return
 
-      if (error) {
+        if (error) {
+          throw error
+        }
+
+        setViolations(data ?? [])
+      } catch (error) {
         console.error(error)
-        setViolations([])
-        setViolationsLoading(false)
-        return
-      }
 
-      setViolations(data ?? [])
-      setViolationsLoading(false)
+        if (isMounted) {
+          setViolations([])
+        }
+      } finally {
+        if (isMounted) {
+          setViolationsLoading(false)
+        }
+      }
     }
 
     loadViolations()
@@ -424,23 +466,37 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return
     }
 
-    setTelegramSectionLoading(true)
-
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .select(PROFILE_SELECT_QUERY)
-      .eq('id', user.id)
-      .single()
-
-    if (profileError) {
-      console.error(profileError)
-      setTelegramSectionLoading(false)
-      return
+    if (!profileViewRef.current) {
+      setTelegramSectionLoading(true)
     }
 
-    setProfileView(profileData)
-    writeCachedProfile(user.id, profileData)
-    setTelegramSectionLoading(false)
+    try {
+      const { data: profileData, error: profileError } = await safeSupabase(
+        () =>
+          supabase
+            .from('profiles')
+            .select(PROFILE_SELECT_QUERY)
+            .eq('id', user.id)
+            .single(),
+        {
+          timeoutMs: 3500,
+          retries: 0,
+          timeoutMessage: 'Статус Telegram загружается слишком долго',
+        }
+      )
+
+      if (profileError) {
+        throw profileError
+      }
+
+      profileViewRef.current = profileData
+      setProfileView(profileData)
+      writeCachedProfile(user.id, profileData)
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setTelegramSectionLoading(false)
+    }
   }, [user])
 
   useEffect(() => {
@@ -532,6 +588,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return false
     }
 
+    profileViewRef.current = data
     setProfileView(data)
     writeCachedProfile(user.id, data)
     setAvatarSaving(false)
@@ -571,6 +628,7 @@ export default function AccountPage({ user, profile, profileLoading }) {
       return
     }
 
+    profileViewRef.current = data
     setProfileView(data)
     writeCachedProfile(user.id, data)
     setAvatarMessage('Форма аватара обновлена')
@@ -866,11 +924,13 @@ export default function AccountPage({ user, profile, profileLoading }) {
                         </div>
 
                         <div className="text-sm leading-7 text-zinc-300 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">
-                          Комментарий администратора: {item.reason_text || 'Комментарий отсутствует'}
+                          Комментарий администратора:{' '}
+                          {item.reason_text || 'Комментарий отсутствует'}
                         </div>
 
                         <div className="text-sm text-zinc-500">
-                          Дата: {new Date(item.created_at).toLocaleString('ru-RU')}
+                          Дата:{' '}
+                          {new Date(item.created_at).toLocaleString('ru-RU')}
                         </div>
                       </div>
 

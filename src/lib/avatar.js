@@ -1,10 +1,13 @@
 import { supabase } from './supabase'
+import { safeSupabase } from './asyncData'
 
 export const MAX_AVATAR_SIZE = 5 * 1024 * 1024
 export const ALLOWED_AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
-const SIGNED_URL_TTL_MS = 50 * 60 * 1000
-const SIGNED_URL_CACHE_PREFIX = 'velinor_signed_avatar_url_'
+const SIGNED_URL_TTL_MS = 45 * 60 * 1000
+const SIGNED_URL_EXPIRES_IN_SECONDS = 3600
+const SIGNED_URL_TIMEOUT_MS = 3500
+const SIGNED_URL_CACHE_PREFIX = 'velinor_avatar_signed_url_'
 
 const signedUrlCache = new Map()
 const pendingSignedUrlRequests = new Map()
@@ -42,23 +45,24 @@ function getPersistentCacheKey(bucket, path) {
   return `${SIGNED_URL_CACHE_PREFIX}${bucket}_${path}`
 }
 
-function isUsableCachedSignedUrl(item) {
+function isUsableCachedUrl(value) {
   return (
-    item &&
-    typeof item === 'object' &&
-    typeof item.url === 'string' &&
-    item.url &&
-    Number(item.expiresAt || 0) > Date.now() + 10 * 1000
+    value &&
+    typeof value === 'object' &&
+    typeof value.url === 'string' &&
+    value.url &&
+    Number(value.expiresAt || 0) > Date.now() + 15 * 1000
   )
 }
 
-function readSignedUrlFromLocalCache(bucket, path) {
+function readPersistentSignedUrl(bucket, path) {
   try {
     const raw = localStorage.getItem(getPersistentCacheKey(bucket, path))
     if (!raw) return null
 
     const parsed = JSON.parse(raw)
-    if (!isUsableCachedSignedUrl(parsed)) {
+
+    if (!isUsableCachedUrl(parsed)) {
       localStorage.removeItem(getPersistentCacheKey(bucket, path))
       return null
     }
@@ -69,7 +73,7 @@ function readSignedUrlFromLocalCache(bucket, path) {
   }
 }
 
-function writeSignedUrlToLocalCache(bucket, path, value) {
+function writePersistentSignedUrl(bucket, path, value) {
   try {
     localStorage.setItem(
       getPersistentCacheKey(bucket, path),
@@ -80,7 +84,7 @@ function writeSignedUrlToLocalCache(bucket, path, value) {
   }
 }
 
-function clearSignedUrlFromLocalCache(bucket, path) {
+function removePersistentSignedUrl(bucket, path) {
   try {
     localStorage.removeItem(getPersistentCacheKey(bucket, path))
   } catch {
@@ -94,20 +98,24 @@ function invalidateSignedUrlCache(bucket, path) {
   const cacheKey = getCacheKey(bucket, path)
   signedUrlCache.delete(cacheKey)
   pendingSignedUrlRequests.delete(cacheKey)
-  clearSignedUrlFromLocalCache(bucket, path)
+  removePersistentSignedUrl(bucket, path)
 }
 
-async function createSignedStorageUrl(bucket, path, expiresInSeconds = 3600) {
+async function createSignedStorageUrl(
+  bucket,
+  path,
+  expiresInSeconds = SIGNED_URL_EXPIRES_IN_SECONDS
+) {
   if (!supabase || !path) return null
 
   const cacheKey = getCacheKey(bucket, path)
   const memoryCached = signedUrlCache.get(cacheKey)
 
-  if (isUsableCachedSignedUrl(memoryCached)) {
+  if (isUsableCachedUrl(memoryCached)) {
     return memoryCached.url
   }
 
-  const persistentCached = readSignedUrlFromLocalCache(bucket, path)
+  const persistentCached = readPersistentSignedUrl(bucket, path)
 
   if (persistentCached) {
     signedUrlCache.set(cacheKey, persistentCached)
@@ -120,23 +128,36 @@ async function createSignedStorageUrl(bucket, path, expiresInSeconds = 3600) {
   }
 
   const request = (async () => {
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .createSignedUrl(path, expiresInSeconds)
+    try {
+      const { data, error } = await safeSupabase(
+        () =>
+          supabase.storage
+            .from(bucket)
+            .createSignedUrl(path, expiresInSeconds),
+        {
+          timeoutMs: SIGNED_URL_TIMEOUT_MS,
+          retries: 0,
+          timeoutMessage: 'Аватар загружается слишком долго',
+        }
+      )
 
-    if (error || !data?.signedUrl) {
+      if (error || !data?.signedUrl) {
+        return null
+      }
+
+      const cacheValue = {
+        url: data.signedUrl,
+        expiresAt: Date.now() + SIGNED_URL_TTL_MS,
+      }
+
+      signedUrlCache.set(cacheKey, cacheValue)
+      writePersistentSignedUrl(bucket, path, cacheValue)
+
+      return data.signedUrl
+    } catch (error) {
+      console.error(error)
       return null
     }
-
-    const cacheValue = {
-      url: data.signedUrl,
-      expiresAt: Date.now() + SIGNED_URL_TTL_MS,
-    }
-
-    signedUrlCache.set(cacheKey, cacheValue)
-    writeSignedUrlToLocalCache(bucket, path, cacheValue)
-
-    return data.signedUrl
   })()
 
   pendingSignedUrlRequests.set(cacheKey, request)
@@ -184,13 +205,21 @@ export async function uploadAvatarBlob(userId, blob) {
   const safeMimeType = getSafeMimeType(blob?.type)
   const path = getAvatarStoragePath(userId, safeMimeType)
 
-  const { error } = await supabase.storage
-    .from('profile-avatars')
-    .upload(path, blob, {
-      upsert: false,
-      cacheControl: '3600',
-      contentType: safeMimeType,
-    })
+  const { error } = await safeSupabase(
+    () =>
+      supabase.storage
+        .from('profile-avatars')
+        .upload(path, blob, {
+          upsert: false,
+          cacheControl: '3600',
+          contentType: safeMimeType,
+        }),
+    {
+      timeoutMs: 7000,
+      retries: 0,
+      timeoutMessage: 'Загрузка аватара заняла слишком много времени',
+    }
+  )
 
   return {
     path,
@@ -203,9 +232,14 @@ export async function removeAvatarByPath(path) {
 
   invalidateSignedUrlCache('profile-avatars', path)
 
-  const { error } = await supabase.storage
-    .from('profile-avatars')
-    .remove([path])
+  const { error } = await safeSupabase(
+    () => supabase.storage.from('profile-avatars').remove([path]),
+    {
+      timeoutMs: 5000,
+      retries: 0,
+      timeoutMessage: 'Удаление старого аватара заняло слишком много времени',
+    }
+  )
 
   if (error) {
     console.error(error)
@@ -213,7 +247,7 @@ export async function removeAvatarByPath(path) {
 }
 
 export async function downloadAvatarAsObjectUrl(path) {
-  return createSignedStorageUrl('profile-avatars', path, 3600)
+  return createSignedStorageUrl('profile-avatars', path)
 }
 
 export function revokeObjectUrl(url) {
