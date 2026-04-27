@@ -4,6 +4,7 @@ export const MAX_AVATAR_SIZE = 5 * 1024 * 1024
 export const ALLOWED_AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
 const SIGNED_URL_TTL_MS = 50 * 60 * 1000
+const SIGNED_URL_CACHE_PREFIX = 'velinor_signed_avatar_url_'
 
 const signedUrlCache = new Map()
 const pendingSignedUrlRequests = new Map()
@@ -37,20 +38,80 @@ function getCacheKey(bucket, path) {
   return `${bucket}:${path}`
 }
 
+function getPersistentCacheKey(bucket, path) {
+  return `${SIGNED_URL_CACHE_PREFIX}${bucket}_${path}`
+}
+
+function isUsableCachedSignedUrl(item) {
+  return (
+    item &&
+    typeof item === 'object' &&
+    typeof item.url === 'string' &&
+    item.url &&
+    Number(item.expiresAt || 0) > Date.now() + 10 * 1000
+  )
+}
+
+function readSignedUrlFromLocalCache(bucket, path) {
+  try {
+    const raw = localStorage.getItem(getPersistentCacheKey(bucket, path))
+    if (!raw) return null
+
+    const parsed = JSON.parse(raw)
+    if (!isUsableCachedSignedUrl(parsed)) {
+      localStorage.removeItem(getPersistentCacheKey(bucket, path))
+      return null
+    }
+
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeSignedUrlToLocalCache(bucket, path, value) {
+  try {
+    localStorage.setItem(
+      getPersistentCacheKey(bucket, path),
+      JSON.stringify(value)
+    )
+  } catch {
+    // ignore cache write errors
+  }
+}
+
+function clearSignedUrlFromLocalCache(bucket, path) {
+  try {
+    localStorage.removeItem(getPersistentCacheKey(bucket, path))
+  } catch {
+    // ignore
+  }
+}
+
 function invalidateSignedUrlCache(bucket, path) {
   if (!path) return
-  signedUrlCache.delete(getCacheKey(bucket, path))
-  pendingSignedUrlRequests.delete(getCacheKey(bucket, path))
+
+  const cacheKey = getCacheKey(bucket, path)
+  signedUrlCache.delete(cacheKey)
+  pendingSignedUrlRequests.delete(cacheKey)
+  clearSignedUrlFromLocalCache(bucket, path)
 }
 
 async function createSignedStorageUrl(bucket, path, expiresInSeconds = 3600) {
   if (!supabase || !path) return null
 
   const cacheKey = getCacheKey(bucket, path)
-  const cached = signedUrlCache.get(cacheKey)
+  const memoryCached = signedUrlCache.get(cacheKey)
 
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.url
+  if (isUsableCachedSignedUrl(memoryCached)) {
+    return memoryCached.url
+  }
+
+  const persistentCached = readSignedUrlFromLocalCache(bucket, path)
+
+  if (persistentCached) {
+    signedUrlCache.set(cacheKey, persistentCached)
+    return persistentCached.url
   }
 
   const pending = pendingSignedUrlRequests.get(cacheKey)
@@ -67,10 +128,13 @@ async function createSignedStorageUrl(bucket, path, expiresInSeconds = 3600) {
       return null
     }
 
-    signedUrlCache.set(cacheKey, {
+    const cacheValue = {
       url: data.signedUrl,
       expiresAt: Date.now() + SIGNED_URL_TTL_MS,
-    })
+    }
+
+    signedUrlCache.set(cacheKey, cacheValue)
+    writeSignedUrlToLocalCache(bucket, path, cacheValue)
 
     return data.signedUrl
   })()
